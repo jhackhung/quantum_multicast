@@ -1,0 +1,12 @@
+{
+  "mode": "real",
+  "gml_path": "Deltacom.gml",
+  "name": "ITCD",
+  "delay_min_ms": 10.0,
+  "delay_max_ms": 100.0,
+  "num_quantum_computers": 20,
+  "num_destinations": 30,
+  "seed": 0,
+  "role_seed": 1,
+  "output_name": "itcd"
+}

@@ -1,0 +1,12 @@
+{
+  "mode": "synthetic",
+  "num_nodes": 500,
+  "area_size": 20.0,
+  "waxman_alpha": 0.4,
+  "waxman_beta": 10.0,
+  "num_quantum_computers": 120,
+  "num_destinations": 30,
+  "seed": 7,
+  "role_seed": 1,
+  "output_name": "synthetic_500"
+}

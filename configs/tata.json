@@ -1,0 +1,12 @@
+{
+  "mode": "real",
+  "gml_path": "TataNld.gml",
+  "name": "TATA",
+  "delay_min_ms": 10.0,
+  "delay_max_ms": 100.0,
+  "num_quantum_computers": 25,
+  "num_destinations": 30,
+  "seed": 0,
+  "role_seed": 1,
+  "output_name": "tata"
+}
