@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 import json
 import math
 import random
@@ -66,12 +68,12 @@ class QuantumNetwork:
         ]
         return {
             "name": self.name,
-            "nodes": nodes,
-            "edges": edges,
+            "meta": self.meta,
+            "s": str(self.s) if self.s is not None else None,
             "B": sorted(str(x) for x in self.B),
             "D": sorted(str(x) for x in self.D),
-            "s": str(self.s) if self.s is not None else None,
-            "meta": self.meta,
+            "nodes": nodes,
+            "edges": edges,
         }
  
     def save(self, path: str) -> None:
@@ -382,3 +384,38 @@ def build_network(config: dict) -> QuantumNetwork:
     qn.meta = {"config": config}
     qn.validate_roles()
     return qn
+
+def main() -> None:
+    """
+    Graph.py
+
+    Entry point that reads a config JSON (config/*.json), injects it into
+    Graph.build_network() to construct the networkx graph + WQMN role
+    assignment (B/D/s), and saves the result under output_graph/.
+
+    Usage:
+        python Graph.py configs/itcd.json
+        python Graph.py configs/tata.json
+        python Graph.py configs/synthetic_500.json output_graph
+    """
+    if len(sys.argv) < 1:
+        print("Usage: python Graph.py --config <config.json> [--output-dir <output_dir>]")
+        return
+    
+    config_path = sys.argv[1]
+    output_dir = sys.argv[2] if len(sys.argv) > 2 else "output_graph"
+    
+    with open(config_path) as f:
+        config = json.load(f)
+    
+    qn = build_network(config)
+    os.makedirs(output_dir, exist_ok=True)
+    output_name = config.get("output_name") or qn.name or "graph"
+    output_path = os.path.join(output_dir, f"{output_name}.json")
+    qn.save(output_path)
+
+    print(qn.summary())
+    print(f"Saved to {output_path}")    
+
+if __name__ == "__main__":
+    main()
