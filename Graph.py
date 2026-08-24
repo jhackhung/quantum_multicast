@@ -104,34 +104,46 @@ class QuantumNetwork:
 
 def assign_roles(
     graph: nx.DiGraph,
-    num_quantum_computers: int,
     num_destinations: int,
     rng: random.Random,
-    candidate_B=None,
+    num_quantum_computers: int | None = None,
 ) -> QuantumNetwork:
     """Randomly assign B, s, D over an existing graph, following:
         B subset V,           |B| = num_quantum_computers
         s in B \\ D            (source is a quantum computer, not a destination)
-        D subset V \\ {s},     |D| = num_destinations
+        V = B ∪ D or D subset V \\ {s}  |D| = num_destinations
+    1. num_quantum_computers is None: D is sampled first, and B is set to everything else
+    2. num_quantum_computers is given: B is sampled first
     """
     nodes = list(graph.nodes())
-    pool = list(candidate_B) if candidate_B is not None else nodes
  
-    if num_quantum_computers > len(pool):
-        raise ValueError(
-            f"num_quantum_computers ({num_quantum_computers}) exceeds candidate pool ({len(pool)})"
-        )
-    B = set(rng.sample(pool, num_quantum_computers))
- 
-    s = rng.choice(list(B))
- 
-    remaining = [n for n in nodes if n != s]
-    if num_destinations > len(remaining):
-        raise ValueError(
-            f"num_destinations ({num_destinations}) exceeds available nodes ({len(remaining)})"
-        )
-    D = set(rng.sample(remaining, num_destinations))
- 
+    if num_quantum_computers is None:
+        # Mode 1: D first, B = V \ D.
+        if not (0 < num_destinations < len(nodes)):
+            raise ValueError(
+                f"num_destinations ({num_destinations}) must be between 1 and "
+                f"{len(nodes) - 1} (exclusive of all nodes) so B = V \\ D is non-empty"
+            )
+        D = set(rng.sample(nodes, num_destinations))
+        B = set(nodes) - D  # everything not a destination is a quantum computer
+        s = rng.choice(list(B))
+
+    else:
+        # Mode 2: B first (fixed size)
+        if num_quantum_computers > len(nodes):
+            raise ValueError(
+                f"num_quantum_computers ({num_quantum_computers}) exceeds available nodes ({len(nodes)})"
+            )
+        B = set(rng.sample(nodes, num_quantum_computers))
+        s = rng.choice(list(B))
+
+        remaining = [n for n in nodes if n != s]
+        if num_destinations > len(remaining):
+            raise ValueError(
+                f"num_destinations ({num_destinations}) exceeds available nodes ({len(remaining)})"
+            )
+        D = set(rng.sample(remaining, num_destinations))
+
     return QuantumNetwork(graph=graph, B=B, D=D, s=s)
 
 def _parse_topology_zoo_gml(path: str):
@@ -139,8 +151,8 @@ def _parse_topology_zoo_gml(path: str):
  
     networkx.read_gml() rejects some Topology Zoo files because they contain
     parallel edges (duplicate source/target pairs), which is legal GML but
-    not accepted by nx's default (non-multigraph) parser. We only need
-    node id / label / lat / lon and edge source / target, so a light
+    not accepted by nx's default (non-multigraph) parser. 
+    We only need node id / label / lat / lon and edge source / target, so a light
     regex-based parser is more robust here than fighting read_gml's options.
     """
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -171,6 +183,7 @@ def _parse_topology_zoo_gml(path: str):
     return nodes, edges
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
+    """地球表面兩個經緯度座標之間的直線球面距離 (單位km)"""
     R = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -185,13 +198,11 @@ def load_real_network(
     delay_max_ms: float = 100.0,
     rng: random.Random | None = None,
 ) -> nx.DiGraph:
-    """Load a Topology Zoo GML file (given its path directly, e.g. your own
-    downloaded ITCD/TATA .gml) into a weighted bidirectional DiGraph.
+    """Load a Topology Zoo GML file (ITCD/TATA .gml) into a weighted bidirectional DiGraph.
  
     Edge weight = delay in ms, derived from great-circle distance between
     endpoints and linearly rescaled to [delay_min_ms, delay_max_ms] across
-    this network's own edges (matches the paper's "10-100 ms, higher delay
-    -> larger weight" scheme).
+    this network's own edges.
  
     Nodes missing lat/lon (a handful of entries in the raw Topology Zoo
     files) fall back to a distance randomly drawn from the empirical
@@ -251,11 +262,11 @@ def generate_synthetic_network(
     area_size: float = 20.0,
     waxman_alpha: float = 0.4,
     waxman_beta: float = 10.0,
+    delay_min_ms: float = 10.0,
+    delay_max_ms: float = 100.0,
     seed: int | None = None,
 ) -> nx.DiGraph:
-    """Generate a synthetic quantum-processor network following the paper's
-    BRITE / Waxman setup (Sec. 6.1):
- 
+    """Generate a synthetic quantum-processor network following BRITE / Waxman setup:
         - num_nodes points placed uniformly at random in an
           area_size x area_size square (default 20 x 20).
         - edge (u, v) exists with probability
@@ -279,46 +290,55 @@ def generate_synthetic_network(
         default=1.0,
     ) or 1.0
  
-    G = nx.DiGraph()
-    for i in range(num_nodes):
-        G.add_node(i, x=positions[i][0], y=positions[i][1])
- 
+    pair_dists = {}
     for u in range(num_nodes):
         for v in range(u + 1, num_nodes):
             d = dist(u, v)
             p = waxman_alpha * math.exp(-waxman_beta * d / L)
             if rng.random() < p:
-                G.add_edge(u, v, weight=d)
-                G.add_edge(v, u, weight=d)
- 
-    # Ensure connectivity: attach any isolated components to their nearest
-    # neighbor so every node is reachable (Waxman graphs can otherwise be
-    # disconnected, which QCN/Dijkstra requires to avoid). This is a common,
-    # unspecified-by-the-paper practical fix.
-    _ensure_connected(G, dist)
- 
+                pair_dists[(u, v)] = d
+                pair_dists[(v, u)] = d
+    
+    # find bridge pairs needed to connect isolated components
+    helper = nx.Graph()
+    helper.add_nodes_from(range(num_nodes))
+    helper.add_edges_from(pair_dists.keys())
+    components = list(nx.connected_components(helper))
+    
+    bridge_dists = {}
+    if len(components) > 1:
+        components.sort(key=len, reverse=True)
+        main_component = components[0]
+        for comp in components[1:]:
+            best = None
+            for u in comp:
+                for v in main_component:
+                    d = dist(u, v)
+                    if best is None or d < best[0]:
+                        best = (d, u, v)
+            d, u, v = best
+            bridge_dists[(u, v)] = d
+            main_component = main_component | comp
+    
+    all_dists = list(pair_dists.values()) + list(bridge_dists.values())
+    dmin = min(all_dists, default=1.0)
+    dmax = max(all_dists, default=1.0)
+    span = (dmax - dmin) or 1.0
+
+    def to_delay(d):
+        return delay_min_ms + (d - dmin) / span * (delay_max_ms - delay_min_ms)
+
+    G = nx.DiGraph()
+    for i in range(num_nodes):
+        G.add_node(i, x=positions[i][0], y=positions[i][1])
+
+    for (u, v), d in {**pair_dists, **bridge_dists}.items():
+        delay = to_delay(d)
+        G.add_edge(u, v, weight=delay)
+        G.add_edge(v, u, weight=delay)
+
     G.graph["name"] = f"synthetic_n{num_nodes}"
     return G
- 
-def _ensure_connected(G: nx.DiGraph, dist_fn) -> None:
-    undirected = nx.Graph(G.to_undirected())
-    components = list(nx.connected_components(undirected))
-    if len(components) <= 1:
-        return
-    components.sort(key=len, reverse=True)
-    main_component = components[0]
-    for comp in components[1:]:
-        # connect the closest pair between `comp` and `main_component`
-        best = None
-        for u in comp:
-            for v in main_component:
-                d = dist_fn(u, v)
-                if best is None or d < best[0]:
-                    best = (d, u, v)
-        d, u, v = best
-        G.add_edge(u, v, weight=d)
-        G.add_edge(v, u, weight=d)
-        main_component = main_component | comp
         
 def build_network(config: dict) -> QuantumNetwork:
     """Build a QuantumNetwork (graph + B/D/s roles) from a config dict, as
@@ -344,6 +364,8 @@ def build_network(config: dict) -> QuantumNetwork:
             area_size=config.get("area_size", 20.0),
             waxman_alpha=config.get("waxman_alpha", 0.4),
             waxman_beta=config.get("waxman_beta", 10.0),
+            delay_min_ms=config.get("delay_min_ms", 10.0),
+            delay_max_ms=config.get("delay_max_ms", 100.0),
             seed=seed,
         )
         network_name = config.get("name", "") or G.graph["name"]
@@ -352,8 +374,8 @@ def build_network(config: dict) -> QuantumNetwork:
  
     qn = assign_roles(
         G,
-        num_quantum_computers=config["num_quantum_computers"],
-        num_destinations=config["num_destinations"],
+        num_quantum_computers=config.get("num_qc"),
+        num_destinations=config["num_dests"],
         rng=random.Random(role_seed),
     )
     qn.name = network_name

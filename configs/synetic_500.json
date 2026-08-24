@@ -1,12 +1,17 @@
 {
   "mode": "synthetic",
   "num_nodes": 500,
+  "delay_min_ms": 10.0,
+  "delay_max_ms": 100.0,
   "area_size": 20.0,
   "waxman_alpha": 0.4,
   "waxman_beta": 10.0,
-  "num_quantum_computers": 120,
-  "num_destinations": 30,
+  "num_dests": 30,
+  "alpha": 3,
   "seed": 7,
   "role_seed": 1,
-  "output_name": "synthetic_500"
+  "output_name": "synthetic_500_d30_qc120",
+  "step_qc": 5,
+  "step_dests": 5,
+  "_comment": "can set \"num_qc\": 120, to specify the number of quantum computers"
 }
