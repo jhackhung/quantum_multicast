@@ -1,58 +1,118 @@
-"""
-main.py
-
-Entry point that reads a config JSON (config/*.json), injects it into
-Graph.build_network() to construct the networkx graph + WQMN role
-assignment (B/D/s), and saves the result under output_graph/.
-
-Usage:
-    python3 main.py --config config/itcd.json
-    python3 main.py --config config/tata.json
-    python3 main.py --config config/synthetic_500.json --output-dir output_graph
-"""
-
 from __future__ import annotations
 
-import argparse
+import sys
 import json
 import os
+import time
+import csv
 
 import Graph
+from Graph import QuantumNetwork
+import networkx as nx
+import evaluate
+import CLEA
 
+CHECKPOINT_DIR = "checkpoints"
 
-def load_config(path: str) -> dict:
-    with open(path) as f:
-        return json.load(f)
+def build_spt_tree(qn: QuantumNetwork) -> set[tuple]:
+    # pred: {node: [pred1, pred2, ...]}
+    pred, _ = nx.dijkstra_predecessor_and_distance(qn.graph, qn.s, weight="weight")
 
+    tree_edges = set()
+    for d in qn.D:
+        v = d
+        while v != qn.s:
+            candidates = pred.get(v)
+            if not candidates:
+                raise ValueError(f"destination {d} unreachable from source {qn.s}")
+            u = min(candidates)  # deterministic tie-break
+            tree_edges.add((u, v))
+            v = u
+    
+    return tree_edges
 
-def run(config: dict, output_dir: str) -> str:
-    """Build the network from config and save it. Returns the output path."""
-    qn = Graph.build_network(config)
+ALGO_REGISTRY = {
+    "spt": build_spt_tree,
+    "clea": CLEA.build_clea_tree,
+}
 
-    os.makedirs(output_dir, exist_ok=True)
-    output_name = config.get("output_name") or qn.name or "graph"
-    output_path = os.path.join(output_dir, f"{output_name}.json")
-    qn.save(output_path)
+def parse_algos(spec: str | None) -> list[str]:
+    if spec is None or spec == "all":
+        return list(ALGO_REGISTRY.keys())
+    return [a.strip() for a in spec.split(",")]
 
-    print(qn.summary())
-    print(f"Saved to {output_path}")
-    return output_path
+def save_results(results: list[dict], path: str) -> None:
+    if not results:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_header = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=results[0].keys())
+        if write_header:
+            writer.writeheader()
+        writer.writerows(results)
 
-
-def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Build a WQMN network (real Topology-Zoo network or synthetic BRITE/Waxman network) from a config file."
-    )
-    p.add_argument("--config", required=True, help="Path to a config JSON file, e.g. config/itcd.json")
-    p.add_argument("--output-dir", default="output_graph", help="Directory to save the generated graph JSON.")
-    return p.parse_args(argv)
-
-
-def main(argv=None) -> None:
-    args = parse_args(argv)
-    config = load_config(args.config)
-    run(config, args.output_dir)
-
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("用法: python main.py <config.json> [dests] [all|stp,qsta|...]")
+        sys.exit(1)
+        
+    config_path = sys.argv[1]
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+        
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    
+    sweep_x = sys.argv[2] if len(sys.argv) > 2 else cfg.get("sweep_x", "dests")
+    algos_spec = sys.argv[3] if len(sys.argv) > 3 else cfg.get("algos", "all")
+    num_runs = int(cfg.get("num_runs", 1))
+    
+    algos = parse_algos(algos_spec)
+    base_seed = cfg.get("seed", 0)
+    print(f"algos = {algos}")
+    print(f"sweep_x = {sweep_x}")
+    print(f"num_runs = {num_runs}, base_seed = {base_seed}")
+    
+    all_results = []
+    for run_idx in range(num_runs):
+        variant_cfg = dict(cfg)
+        variant_cfg["seed"] = base_seed + run_idx
+        
+        print("\n" + "=" * 70)
+        print(f"Run {run_idx + 1}/{num_runs}, seed={variant_cfg['seed']}")
+        print("=" * 70)
+        
+        qn = Graph.build_network(variant_cfg)
+        
+        print(qn.summary())
+        
+        # ==================================================
+        # Build each algorithm once per run.
+        # ==================================================
+        for algo_name in algos:
+            print(f"Building {algo_name} tree for {qn.name} (run {run_idx})...")
+            
+            start_time = time.time()
+            tree_edges = ALGO_REGISTRY[algo_name](qn)
+            end_time = time.time()
+            print(f"{algo_name} tree built in {end_time - start_time:.4f} seconds.")
+            
+            metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=cfg["alpha"])
+            all_results.append({
+                "graph": cfg.get("output_name", ""),
+                "num_dests": len(qn.D),
+                "num_qc": len(qn.B),
+                "run": run_idx,
+                "algo": algo_name,
+                **metrics,
+            })
+    
+    
+    output_path = os.path.join(CHECKPOINT_DIR, f"{sweep_x}_{cfg.get('output_name', 'result')}.csv")
+    save_results(all_results, output_path)
+    
+    for r in all_results:
+        print(f"[{r['algo']}] run={r['run']} total_cost={r.get('total_cost')}")
 
 if __name__ == "__main__":
     main()

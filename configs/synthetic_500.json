@@ -11,7 +11,7 @@
   "seed": 7,
   "role_seed": 1,
   "output_name": "synthetic_500_d30_qc120",
-  "step_qc": 5,
   "step_dests": 5,
+  "num_runs": 1,
   "_comment": "can set \"num_qc\": 120, to specify the number of quantum computers"
 }
