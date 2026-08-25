@@ -39,6 +39,17 @@ def _expand_path_edges(paths: dict, closure_edges: set) -> set[tuple]:
             real_edges.add((path[i], path[i + 1]))
     return real_edges
 
+def _collapse_to_tree(graph: nx.DiGraph, root, tree_edges: set) -> set[tuple]:
+    """
+    把展開最短路徑後可能含冗餘/交叉入邊的邊集合，
+    重新收斂成一棵合法的 out-tree（每個節點入度 <= 1）。
+    """
+    nodes = {root} | {u for e in tree_edges for u in e}
+    G_S = graph.subgraph(nodes).copy()
+    G_S.remove_edges_from(list(G_S.in_edges(root)))
+    arb = nx.minimum_spanning_arborescence(G_S, attr="weight")
+    return set(arb.edges())
+
 def build_clea_tree(qn: QuantumNetwork) -> set[tuple]:
     """
     CLEA baseline tree construction:
@@ -102,4 +113,4 @@ def build_clea_tree(qn: QuantumNetwork) -> set[tuple]:
                 f"{qn.s} in the CLEA baseline tree"
             )
 
-    return tree_edges
+    return _collapse_to_tree(graph, qn.s, tree_edges)
