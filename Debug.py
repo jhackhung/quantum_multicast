@@ -68,6 +68,61 @@ def visualize_output_graph(
         plt.close()
 
 
+def visualize_tree(
+    qn: QuantumNetwork,
+    tree_edges: set[tuple],
+    output_name: str | None = None,
+    save_path: str | None = None,
+    show: bool = True,
+    figsize: tuple[float, float] = (12, 10),
+) -> None:
+    """Draw a QuantumNetwork with a multicast tree overlaid:
+        - s (source): red star
+        - B \\ {s} (quantum computers): orange circles
+        - D (destinations): blue squares
+        - everything else: light gray dots
+        - tree_edges: highlighted in solid black over the faint full graph
+
+    output_name (e.g. algo_name + graph_name) is used as the plot title
+    when given, falling back to qn.summary().
+    """
+    G = qn.graph
+    pos = _infer_positions(G)
+
+    other = set(G.nodes()) - qn.B - qn.D
+    b_only = qn.B - {qn.s}
+    d_only = qn.D - {qn.s}
+
+    plt.figure(figsize=figsize)
+
+    nx.draw_networkx_edges(G, pos, alpha=0.1, arrows=False, width=0.5)
+    nx.draw_networkx_edges(
+        G, pos, edgelist=list(tree_edges), edge_color="black", arrows=True,
+        arrowsize=10, width=1.5,
+    )
+    nx.draw_networkx_nodes(G, pos, nodelist=list(other), node_color="lightgray", node_size=40)
+    nx.draw_networkx_nodes(G, pos, nodelist=list(b_only), node_color="orange", node_size=80, label="B (quantum computers)")
+    nx.draw_networkx_nodes(G, pos, nodelist=list(d_only), node_color="royalblue", node_shape="s", node_size=80, label="D (destinations)")
+    if qn.s is not None:
+        nx.draw_networkx_nodes(G, pos, nodelist=[qn.s], node_color="red", node_shape="*", node_size=300, label="s (source)")
+
+    labels = {n: G.nodes[n].get("label", n) for n in qn.B | qn.D}
+    nx.draw_networkx_labels(G, pos, labels=labels, font_size=7)
+
+    plt.title(output_name or qn.summary())
+    plt.legend(scatterpoints=1, loc="best")
+    plt.axis("off")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        print(f"Saved figure to {save_path}")
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+
 def _infer_positions(G: nx.DiGraph) -> dict:
     nodes = list(G.nodes(data=True))
     if nodes and all(a.get("lat") is not None and a.get("lon") is not None for _, a in nodes):

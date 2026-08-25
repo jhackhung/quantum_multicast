@@ -6,11 +6,17 @@ import os
 import time
 import csv
 
+import matplotlib
+matplotlib.use("Agg")  # avoid initializing a GUI backend when running headless
+
 import Graph
 from Graph import QuantumNetwork
 import networkx as nx
 import evaluate
 import CLEA
+import DMST
+import KMB
+import Debug
 
 CHECKPOINT_DIR = "checkpoints"
 
@@ -34,6 +40,8 @@ def build_spt_tree(qn: QuantumNetwork) -> set[tuple]:
 ALGO_REGISTRY = {
     "spt": build_spt_tree,
     "clea": CLEA.build_clea_tree,
+    "dmst": lambda qn: DMST.build_dst_tree(qn, i=2),
+    "kmb": KMB.build_kmb_tree,
 }
 
 def parse_algos(spec: str | None) -> list[str]:
@@ -90,29 +98,43 @@ def main() -> None:
         # Build each algorithm once per run.
         # ==================================================
         for algo_name in algos:
-            print(f"Building {algo_name} tree for {qn.name} (run {run_idx})...")
+            print(f"\n--- Building {algo_name} tree for {qn.name} (run {run_idx})... ---")
             
             start_time = time.time()
             tree_edges = ALGO_REGISTRY[algo_name](qn)
             end_time = time.time()
-            print(f"{algo_name} tree built in {end_time - start_time:.4f} seconds.")
-            
-            metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=cfg["alpha"])
-            all_results.append({
-                "graph": cfg.get("output_name", ""),
-                "num_dests": len(qn.D),
-                "num_qc": len(qn.B),
-                "run": run_idx,
-                "algo": algo_name,
-                **metrics,
-            })
+            print(f"\nTotal execution time: {end_time - start_time:.4f} seconds.")
+
+            # --- temporary sanity check until evaluate.py is ready ---
+            total_cost = sum(qn.weight(u, v) for u, v in tree_edges)
+            print(f"\nnum_edges = {len(tree_edges)}, total_cost = {total_cost:.4f}")
+            # print(f"edges = {sorted(tree_edges)}")
+
+            tree_output_name = f"{algo_name}_{qn.name}"
+            os.makedirs("tree_visualize", exist_ok=True)
+            fig_path = os.path.join("tree_visualize", f"{tree_output_name}.png")
+            Debug.visualize_tree(
+                qn, tree_edges, output_name=tree_output_name,
+                save_path=fig_path, show=False,
+            )
+            # ----------------------------------------------------------
+
+            # metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=cfg["alpha"])
+            # all_results.append({
+            #     "graph": cfg.get("output_name", ""),
+            #     "num_dests": len(qn.D),
+            #     "num_qc": len(qn.B),
+            #     "run": run_idx,
+            #     "algo": algo_name,
+            #     **metrics,
+            # })
     
     
-    output_path = os.path.join(CHECKPOINT_DIR, f"{sweep_x}_{cfg.get('output_name', 'result')}.csv")
-    save_results(all_results, output_path)
+    # output_path = os.path.join(CHECKPOINT_DIR, f"{sweep_x}_{cfg.get('output_name', 'result')}.csv")
+    # save_results(all_results, output_path)
     
-    for r in all_results:
-        print(f"[{r['algo']}] run={r['run']} total_cost={r.get('total_cost')}")
+    # for r in all_results:
+    #     print(f"[{r['algo']}] run={r['run']} total_cost={r.get('total_cost')}")
 
 if __name__ == "__main__":
     main()
