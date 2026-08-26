@@ -2,6 +2,16 @@ import math
 import networkx as nx
 from Graph import QuantumNetwork
 
+def _collapse_to_tree(graph: nx.DiGraph, root, tree_edges: set) -> set[tuple]:
+    """
+    把展開最短路徑後可能含冗餘/交叉入邊的邊集合，
+    重新收斂成一棵合法的 out-tree（每個節點入度 <= 1）。
+    """
+    nodes = {root} | {u for e in tree_edges for u in e}
+    G_S = graph.subgraph(nodes).copy()
+    G_S.remove_edges_from(list(G_S.in_edges(root)))
+    arb = nx.minimum_spanning_arborescence(G_S, attr="weight")
+    return set(arb.edges())
 
 def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
     """通用遞迴版本：B_i(k, r, X)
@@ -58,7 +68,8 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
         remaining_k = k - len(covered1)
         remaining_X = set(X) - covered1
         edges2, covered2 = B(level, remaining_k, r, remaining_X)
-        return edges1 | edges2, covered1 | covered2
+        merged = _collapse_to_tree(graph, r, edges1 | edges2)
+        return merged, covered1 | covered2
 
     # 搜尋最佳 bunch，並遞迴呼叫 B_{level-1}
     def A(level, k, r, X):
@@ -80,7 +91,7 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
             return set(), set()
 
         _, v, sub_edges, covered = best
-        edges = path_edges(path_r[v]) | sub_edges
+        edges = _collapse_to_tree(graph, r, path_edges(path_r[v]) | sub_edges)
         return edges, covered
 
     edges, covered = B(i, len(terminals), root, terminals)
