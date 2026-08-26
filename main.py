@@ -5,13 +5,14 @@ import json
 import os
 import time
 import csv
+from datetime import datetime, timezone
 
 import matplotlib
 matplotlib.use("Agg")  # avoid initializing a GUI backend when running headless
 
 import Graph
 from Graph import QuantumNetwork
-import networkx as nx
+import networkx as nx   
 import evaluate
 import CLEA
 import DMST
@@ -71,14 +72,16 @@ def main() -> None:
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
         
-    # os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     
     sweep_x = sys.argv[2] if len(sys.argv) > 2 else cfg.get("sweep_x", "dests")
     algos_spec = sys.argv[3] if len(sys.argv) > 3 else cfg.get("algos", "all")
     num_runs = int(cfg.get("num_runs", 1))
     
     algos = parse_algos(algos_spec)
+    alpha = cfg.get("alpha", 1.0)
     base_seed = cfg.get("seed", 0)
+    experiment_id = 0
     print(f"algos = {algos}")
     print(f"sweep_x = {sweep_x}")
     print(f"num_runs = {num_runs}, base_seed = {base_seed}")
@@ -96,54 +99,69 @@ def main() -> None:
         
         print(qn.summary())
         
-        # ==================================================
-        # Build each algorithm once per run.
-        # ==================================================
+        run_results = []
         for algo_name in algos:
             print(f"\n--- Building {algo_name.upper()} tree for {qn.name} (run {run_idx})... ---")
             
             start_time = time.time()
             tree_edges = ALGO_REGISTRY[algo_name](qn)
-            end_time = time.time()
-            print(f"\nTotal execution time: {end_time - start_time:.4f} seconds.")
+            build_time = time.time() - start_time
+            print(f"\nTotal execution time: {build_time:.4f} seconds.")
 
-            # --- temporary sanity check until evaluate.py is ready ---
-            total_cost = sum(qn.weight(u, v) for u, v in tree_edges)
-            print(f"\nnum_edges = {len(tree_edges)}, total_cost = {total_cost:.4f}")
-            all_results.append({
-                "algo": algo_name,
-                "total_cost": total_cost,
-            })
-            # print(f"edges = {sorted(tree_edges)}")
-
-            tree_output_name = f"{algo_name}_{qn.name}"
-            os.makedirs("tree_visualize", exist_ok=True)
-            fig_path = os.path.join("tree_visualize", f"{tree_output_name}.png")
-            Debug.visualize_tree(
-                qn, tree_edges, output_name=tree_output_name,
-                save_path=fig_path, show=False,
+            try:
+                metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha)
+            except ValueError as e:
+                print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
+                continue
+            
+            print(
+                f"num_edges = {len(tree_edges)}, "
+                f"total_cost = {metrics['total_cost']:.4f} "
+                f"(transmission = {metrics['transmission_cost']:.4f}, "
+                f"computation = {metrics['computation_cost']:.4f}), "
+                f"no_lqdc_total_cost = {metrics['no_lqdc_total_cost']:.4f}"
             )
-            # ----------------------------------------------------------
+            
+            result_row = {
+                "experiment_id": experiment_id,
+                "timestamp":  datetime.now().isoformat(timespec="seconds"),
+                "graph": f"{qn.name}_d{len(qn.D)}_b{len(qn.B)}",
+                "algo": algo_name.upper(),
+                # "num_dests": len(qn.D),
+                # "num_qc": len(qn.B),
+                "num_runs": run_idx,
+                "base_seed": base_seed,
+                "build_time_sec": build_time,
+                # "num_edges": len(tree_edges),
+                **metrics,
+            }
+            experiment_id += 1
+            
+            run_results.append(result_row)
+            all_results.append(result_row)
 
-            # metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=cfg["alpha"])
-            # all_results.append({
-            #     "graph": cfg.get("output_name", ""),
-            #     "num_dests": len(qn.D),
-            #     "num_qc": len(qn.B),
-            #     "run": run_idx,
-            #     "algo": algo_name,
-            #     **metrics,
-            # })
-        sorted_results = sorted(all_results, key=lambda r: (r["total_cost"]))
-        print("\n=== Summary of all results ===")
-        for r in sorted_results:
-            print(f"{r['algo']:<10} {r['total_cost']:<12.4f}")
-    
-    # output_path = os.path.join(CHECKPOINT_DIR, f"{sweep_x}_{cfg.get('output_name', 'result')}.csv")
-    # save_results(all_results, output_path)
-    
-    # for r in all_results:
-    #     print(f"[{r['algo']}] run={r['run']} total_cost={r.get('total_cost')}")
+            # tree_output_name = f"{algo_name}_{qn.name}"
+            # os.makedirs("tree_visualize", exist_ok=True)
+            # fig_path = os.path.join("tree_visualize", f"{tree_output_name}.png")
+            # Debug.visualize_tree(
+            #     qn, tree_edges, output_name=tree_output_name,
+            #     save_path=fig_path, show=False,
+            # )
 
+        run_results_sorted = sorted(run_results, key=lambda r: r["total_cost"])
+        print(f"\n=== Summary of run {run_idx} (sorted by total_cost) ===")
+        print(f"{'algo':<10}{'total_cost':>14}{'no_lqdc_cost':>16}{'savings_ratio':>16}")
+        for r in run_results_sorted:
+            print(
+                f"{r['algo']:<10}{r['total_cost']:>14.4f}"
+                f"{r['no_lqdc_total_cost']:>16.4f}"
+                f"{r['lqdc_cost_savings_ratio']:>16.2%}"
+            )
+    
+    graph_name = cfg.get("name", "result")
+    output_path = os.path.join(CHECKPOINT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}.csv")
+    save_results(all_results, output_path)
+    print(f"\nSaved {len(all_results)} rows to {output_path}")
+    
 if __name__ == "__main__":
     main()
