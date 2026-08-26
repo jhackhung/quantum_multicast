@@ -16,6 +16,7 @@ import evaluate
 import CLEA
 import DMST
 import KMB
+import MFCS
 import Debug
 
 CHECKPOINT_DIR = "checkpoints"
@@ -42,6 +43,7 @@ ALGO_REGISTRY = {
     "clea": CLEA.build_clea_tree,
     "dmst": lambda qn: DMST.build_dst_tree(qn, i=2),
     "kmb": KMB.build_kmb_tree,
+    "mfcs": MFCS.build_mfcs_tree,
 }
 
 def parse_algos(spec: str | None) -> list[str]:
@@ -69,7 +71,7 @@ def main() -> None:
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
         
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    # os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     
     sweep_x = sys.argv[2] if len(sys.argv) > 2 else cfg.get("sweep_x", "dests")
     algos_spec = sys.argv[3] if len(sys.argv) > 3 else cfg.get("algos", "all")
@@ -98,7 +100,7 @@ def main() -> None:
         # Build each algorithm once per run.
         # ==================================================
         for algo_name in algos:
-            print(f"\n--- Building {algo_name} tree for {qn.name} (run {run_idx})... ---")
+            print(f"\n--- Building {algo_name.upper()} tree for {qn.name} (run {run_idx})... ---")
             
             start_time = time.time()
             tree_edges = ALGO_REGISTRY[algo_name](qn)
@@ -108,6 +110,10 @@ def main() -> None:
             # --- temporary sanity check until evaluate.py is ready ---
             total_cost = sum(qn.weight(u, v) for u, v in tree_edges)
             print(f"\nnum_edges = {len(tree_edges)}, total_cost = {total_cost:.4f}")
+            all_results.append({
+                "algo": algo_name,
+                "total_cost": total_cost,
+            })
             # print(f"edges = {sorted(tree_edges)}")
 
             tree_output_name = f"{algo_name}_{qn.name}"
@@ -128,7 +134,10 @@ def main() -> None:
             #     "algo": algo_name,
             #     **metrics,
             # })
-    
+        sorted_results = sorted(all_results, key=lambda r: (r["total_cost"]))
+        print("\n=== Summary of all results ===")
+        for r in sorted_results:
+            print(f"{r['algo']:<10} {r['total_cost']:<12.4f}")
     
     # output_path = os.path.join(CHECKPOINT_DIR, f"{sweep_x}_{cfg.get('output_name', 'result')}.csv")
     # save_results(all_results, output_path)
