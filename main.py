@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ast import Dict
 import sys
 import json
 import os
@@ -45,6 +46,14 @@ ALGO_REGISTRY = {
     "dmst": lambda qn: DMST.build_dst_tree(qn, i=2),
     "kmb": KMB.build_kmb_tree,
     "mfcs": MFCS.build_mfcs_tree,
+}
+
+DEFAULT_PLACEMENT_MODE: Dict[str, str] = {
+    "spt": "none",
+    "clea": "branch",
+    "dmst": "branch",
+    "kmb": "branch",
+    "mfcs": "branch",
 }
 
 def parse_algos(spec: str | None) -> list[str]:
@@ -108,8 +117,9 @@ def main() -> None:
             build_time = time.time() - start_time
             print(f"\nTotal execution time: {build_time:.4f} seconds.")
 
+            placement_mode = DEFAULT_PLACEMENT_MODE.get(algo_name, "branch")
             try:
-                metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha)
+                metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode)
             except ValueError as e:
                 print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
                 continue
@@ -139,14 +149,6 @@ def main() -> None:
             
             run_results.append(result_row)
             all_results.append(result_row)
-
-            # tree_output_name = f"{algo_name}_{qn.name}"
-            # os.makedirs("tree_visualize", exist_ok=True)
-            # fig_path = os.path.join("tree_visualize", f"{tree_output_name}.png")
-            # Debug.visualize_tree(
-            #     qn, tree_edges, output_name=tree_output_name,
-            #     save_path=fig_path, show=False,
-            # )
 
         run_results_sorted = sorted(run_results, key=lambda r: r["total_cost"])
         print(f"\n=== Summary of run {run_idx} (sorted by total_cost) ===")
