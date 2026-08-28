@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ast import Dict
+from typing import Dict
 import sys
 import json
 import os
@@ -90,6 +90,7 @@ def main() -> None:
     algos = parse_algos(algos_spec)
     alpha = cfg.get("alpha", 1.0)
     base_seed = cfg.get("seed", 0)
+    k = cfg.get("pdqta_level", 2)
     experiment_id = 0
     print(f"algos = {algos}")
     print(f"sweep_x = {sweep_x}")
@@ -119,7 +120,7 @@ def main() -> None:
 
             placement_mode = DEFAULT_PLACEMENT_MODE.get(algo_name, "branch")
             try:
-                metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode)
+                metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k)
             except ValueError as e:
                 print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
                 continue

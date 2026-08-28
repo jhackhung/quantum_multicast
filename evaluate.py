@@ -176,7 +176,7 @@ def evaluate_tree_full(
     )
 
 def evaluate_tree(
-    qn: QuantumNetwork, tree_edges: Set[Edge], alpha: float, placement_mode: str = "branch"
+    qn: QuantumNetwork, tree_edges: Set[Edge], alpha: float, placement_mode: str = "branch", k: int | None = None
 ) -> dict:
     """對任一棵樹 (QSTA 或 baseline 產生的) 計算 WQMN 總成本，回傳攤平後的 metrics dict。"""
     result = evaluate_tree_full(qn, tree_edges, alpha, placement_mode)
@@ -192,5 +192,6 @@ def evaluate_tree(
         if metrics["no_lqdc_total_cost"] > 0
         else 0.0
     )
+    metrics["k"] = k if k is not None else "N/A"
 
     return metrics
