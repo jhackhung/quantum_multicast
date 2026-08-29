@@ -104,48 +104,46 @@ class QuantumNetwork:
             data = json.load(f)
         return cls.from_dict(data)
 
+def _build_shortest_path_tree_leaves(graph: nx.DiGraph, s: object) -> list:
+    """以 s 為根跑一次不受限的 Dijkstra，取得樹狀結構的葉節點清單。
+    只有葉節點可以安全地當 D 候選，D 無法 transmit to other nodes.
+    """
+    pred, _ = nx.dijkstra_predecessor_and_distance(graph, s, weight="weight")
+
+    has_children = set()
+    for v, preds in pred.items():
+        if not preds:
+            continue
+        u = min(preds)
+        has_children.add(u)
+
+    reachable_non_source = set(pred.keys()) - {s}
+    leaves = [v for v in reachable_non_source if v not in has_children]
+    return leaves
+
 def assign_roles(
     graph: nx.DiGraph,
     num_destinations: int,
     rng: random.Random,
-    num_quantum_computers: int | None = None,
 ) -> QuantumNetwork:
     """Randomly assign B, s, D over an existing graph, following:
         B subset V,           |B| = num_quantum_computers
         s in B \\ D            (source is a quantum computer, not a destination)
         V = B ∪ D or D subset V \\ {s}  |D| = num_destinations
-    1. num_quantum_computers is None: D is sampled first, and B is set to everything else
-    2. num_quantum_computers is given: B is sampled first
+    D is sampled first, and B is set to everything else
     """
     nodes = list(graph.nodes())
- 
-    if num_quantum_computers is None:
-        # Mode 1: D first, B = V \ D.
-        if not (0 < num_destinations < len(nodes)):
-            raise ValueError(
-                f"num_destinations ({num_destinations}) must be between 1 and "
-                f"{len(nodes) - 1} (exclusive of all nodes) so B = V \\ D is non-empty"
-            )
-        D = set(rng.sample(nodes, num_destinations))
-        B = set(nodes) - D  # everything not a destination is a quantum computer
-        s = rng.choice(list(B))
+    s = rng.choice(nodes)
 
-    else:
-        # Mode 2: B first (fixed size)
-        if num_quantum_computers > len(nodes):
-            raise ValueError(
-                f"num_quantum_computers ({num_quantum_computers}) exceeds available nodes ({len(nodes)})"
-            )
-        B = set(rng.sample(nodes, num_quantum_computers))
-        s = rng.choice(list(B))
-
-        remaining = [n for n in nodes if n != s]
-        if num_destinations > len(remaining):
-            raise ValueError(
-                f"num_destinations ({num_destinations}) exceeds available nodes ({len(remaining)})"
-            )
-        D = set(rng.sample(remaining, num_destinations))
-
+    leaves = _build_shortest_path_tree_leaves(graph, s)
+    if num_destinations > len(leaves):
+        raise ValueError(
+            f"num_destinations ({num_destinations}) exceeds the number of tree-leaf "
+            f"candidates ({len(leaves)}) from source {s}. The shortest-path tree from "
+            f"this source doesn't branch enough to support this many QCN-safe destinations. "
+        )
+    D = set(rng.sample(leaves, num_destinations))
+    B = set(nodes) - D
     return QuantumNetwork(graph=graph, B=B, D=D, s=s)
 
 def _parse_topology_zoo_gml(path: str):
@@ -376,7 +374,6 @@ def build_network(config: dict) -> QuantumNetwork:
  
     qn = assign_roles(
         G,
-        num_quantum_computers=config.get("num_qc"),
         num_destinations=config["num_dests"],
         rng=random.Random(role_seed),
     )
