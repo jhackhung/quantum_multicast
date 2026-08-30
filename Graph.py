@@ -126,12 +126,7 @@ def assign_roles(
     num_destinations: int,
     rng: random.Random,
 ) -> QuantumNetwork:
-    """Randomly assign B, s, D over an existing graph, following:
-        B subset V,           |B| = num_quantum_computers
-        s in B \\ D            (source is a quantum computer, not a destination)
-        V = B ∪ D or D subset V \\ {s}  |D| = num_destinations
-    D is sampled first, and B is set to everything else
-    """
+    """既有圖上指派 B / s / D，並保證 QCN 可達性"""
     nodes = list(graph.nodes())
     s = rng.choice(nodes)
 
@@ -257,6 +252,28 @@ def load_real_network(
     G.graph["name"] = name
     return G
 
+def load_custom_network(gml_path: str) -> QuantumNetwork:
+    """Load a small hand-authored (undirected) GML topology, expanding each
+    edge into a bidirectional pair. Node labels encode WQMN roles: the node
+    labeled "s" is the source, labels starting with "d" are destinations,
+    everything else is an LQDC-capable quantum computer (B)."""
+    raw = nx.read_gml(gml_path)
+
+    G = nx.DiGraph()
+    G.add_nodes_from(raw.nodes())
+    for u, v, attrs in raw.edges(data=True):
+        w = attrs["weight"]
+        G.add_edge(u, v, weight=w)
+        G.add_edge(v, u, weight=w)
+
+    s = next(n for n in G.nodes() if n == "s")
+    D = {n for n in G.nodes() if n.startswith("d")}
+    B = set(G.nodes()) - D
+
+    qn = QuantumNetwork(graph=G, B=B, D=D, s=s, name=raw.graph.get("label", "custom"))
+    qn.validate_roles()
+    return qn
+
 def generate_synthetic_network(
     num_nodes: int = 500,
     area_size: float = 20.0,
@@ -348,8 +365,13 @@ def build_network(config: dict) -> QuantumNetwork:
     mode = config["mode"]
     seed = config.get("seed", 0)
     role_seed = config.get("role_seed", 1)
- 
-    if mode == "real":
+
+    if mode == "custom":
+        qn = load_custom_network(gml_path=config["gml_path"])
+        qn.name = config.get("name", "") or qn.name
+        qn.meta = {"config": config}
+        return qn
+    elif mode == "real":
         G = load_real_network(
             gml_path=config["gml_path"],
             name=config.get("name", ""),

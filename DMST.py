@@ -7,8 +7,9 @@ def _collapse_to_tree(graph: nx.DiGraph, root, tree_edges: set) -> set[tuple]:
     把展開最短路徑後可能含冗餘/交叉入邊的邊集合，
     重新收斂成一棵合法的 out-tree（每個節點入度 <= 1）。
     """
-    nodes = {root} | {u for e in tree_edges for u in e}
-    G_S = graph.subgraph(nodes).copy()
+    G_S = nx.DiGraph()
+    G_S.add_nodes_from({root} | {u for e in tree_edges for u in e})
+    G_S.add_edges_from((u, v, graph.get_edge_data(u, v)) for u, v in tree_edges)
     G_S.remove_edges_from(list(G_S.in_edges(root)))
     arb = nx.minimum_spanning_arborescence(G_S, attr="weight")
     return set(arb.edges())

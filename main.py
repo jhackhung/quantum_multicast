@@ -8,9 +8,6 @@ import time
 import csv
 from datetime import datetime, timezone
 
-import matplotlib
-matplotlib.use("Agg")  # avoid initializing a GUI backend when running headless
-
 import Graph
 from Graph import QuantumNetwork
 import networkx as nx   
@@ -19,6 +16,7 @@ import CLEA
 import DMST
 import KMB
 import MFCS
+import QSTA
 import Debug
 
 CHECKPOINT_DIR = "checkpoints"
@@ -46,6 +44,7 @@ ALGO_REGISTRY = {
     "dmst": lambda qn: DMST.build_dst_tree(qn, i=2),
     "kmb": KMB.build_kmb_tree,
     "mfcs": MFCS.build_mfcs_tree,
+    "qsta": None
 }
 
 DEFAULT_PLACEMENT_MODE: Dict[str, str] = {
@@ -112,18 +111,23 @@ def main() -> None:
         run_results = []
         for algo_name in algos:
             print(f"\n--- Building {algo_name.upper()} tree for {qn.name} (run {run_idx})... ---")
-            
             start_time = time.time()
-            tree_edges = ALGO_REGISTRY[algo_name](qn)
+            
+            if algo_name == "qsta":
+                tree_edges, metrics = QSTA.build_and_evaluate_qsta(qn, alpha=alpha, k=k)
+            else:
+                tree_edges = ALGO_REGISTRY[algo_name](qn)
+            
             build_time = time.time() - start_time
             print(f"\nTotal execution time: {build_time:.4f} seconds.")
 
-            placement_mode = DEFAULT_PLACEMENT_MODE.get(algo_name, "branch")
-            try:
-                metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k)
-            except ValueError as e:
-                print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
-                continue
+            if algo_name != "qsta":
+                placement_mode = DEFAULT_PLACEMENT_MODE.get(algo_name, "branch")
+                try:
+                    metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k)
+                except ValueError as e:
+                    print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
+                    continue
             
             print(
                 f"num_edges = {len(tree_edges)}, "
@@ -150,6 +154,14 @@ def main() -> None:
             
             run_results.append(result_row)
             all_results.append(result_row)
+            
+            tree_output_name = f"{algo_name}_{qn.name}"
+            os.makedirs("tree_visualize", exist_ok=True)
+            fig_path = os.path.join("tree_visualize", f"{tree_output_name}.png")
+            Debug.visualize_tree(
+                qn, tree_edges, output_name=tree_output_name,
+                save_path=fig_path, show=False,
+            )
 
         run_results_sorted = sorted(run_results, key=lambda r: r["total_cost"])
         print(f"\n=== Summary of run {run_idx} (sorted by total_cost) ===")
