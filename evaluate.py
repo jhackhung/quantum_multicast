@@ -194,4 +194,4 @@ def evaluate_tree(
     )
     metrics["k"] = k if k is not None else "N/A"
 
-    return metrics
+    return metrics, result.b

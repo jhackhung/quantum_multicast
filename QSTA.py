@@ -329,15 +329,15 @@ def evaluate_qsta_tree(
     )
     metrics["k"] = k
 
-    return atomic_edges, metrics
+    return atomic_edges, metrics, result.b
 
 def build_and_evaluate_qsta(qn: QuantumNetwork, alpha: float, k: int = 2):
     """
-    回傳 (atomic_edges, metrics)；atomic_edges 只供列印/除錯，
+    回傳 (atomic_edges, metrics, b)；atomic_edges 只供列印/除錯，
     """
     W, pred_trees = build_qcn(qn)
     t_temp = pdqta(W, qn, i=k, r=qn.s, m=len(qn.D), X=set(qn.D), alpha=alpha)
     t_final = tbqcm(W, qn, t_temp, alpha)
-    atomic_edges, metrics = evaluate_qsta_tree(qn, W, pred_trees, t_final, alpha, k=k)
-    return atomic_edges, metrics
+    atomic_edges, metrics, b = evaluate_qsta_tree(qn, W, pred_trees, t_final, alpha, k=k)
+    return atomic_edges, metrics, b
                 

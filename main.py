@@ -60,6 +60,19 @@ def parse_algos(spec: str | None) -> list[str]:
         return list(ALGO_REGISTRY.keys())
     return [a.strip() for a in spec.split(",")]
 
+def validate_no_dest_forwarding(qn: QuantumNetwork, tree_edges: set[tuple], algo_name: str) -> None:
+    """D nodes may only receive data, never transmit it (forward to a child).
+
+    A tree edge (u, v) means u transmits to v, so any destination appearing
+    as a u is a protocol violation: only B nodes may transmit.
+    """
+    violators = {u for (u, _v) in tree_edges if u in qn.D}
+    if violators:
+        raise ValueError(
+            f"[{algo_name}] destination node(s) used as transmitter (forwarding to a child): "
+            f"{sorted(str(u) for u in violators)}"
+        )
+
 def save_results(results: list[dict], path: str) -> None:
     if not results:
         return
@@ -87,14 +100,23 @@ def main() -> None:
     num_runs = int(cfg.get("num_runs", 1))
     
     algos = parse_algos(algos_spec)
-    alpha = cfg.get("alpha", 1.0)
+    alpha_cfg = cfg.get("alpha", 1.0)
+    alpha_list = alpha_cfg if isinstance(alpha_cfg, list) else [alpha_cfg]
     base_seed = cfg.get("seed", 0)
     k = cfg.get("pdqta_level", 2)
-    experiment_id = 0
     print(f"algos = {algos}")
     print(f"sweep_x = {sweep_x}")
     print(f"num_runs = {num_runs}, base_seed = {base_seed}")
-    
+    print(f"alpha_list = {alpha_list}")
+
+    for alpha in alpha_list:
+        print("\n" + "#" * 70)
+        print(f"# alpha = {alpha}")
+        print("#" * 70)
+        run_alpha(cfg, sweep_x, algos, num_runs, base_seed, k, alpha)
+
+def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_seed: int, k: int, alpha) -> None:
+    experiment_id = 0
     all_results = []
     for run_idx in range(num_runs):
         variant_cfg = dict(cfg)
@@ -114,17 +136,23 @@ def main() -> None:
             start_time = time.time()
             
             if algo_name == "qsta":
-                tree_edges, metrics = QSTA.build_and_evaluate_qsta(qn, alpha=alpha, k=k)
+                tree_edges, metrics, b = QSTA.build_and_evaluate_qsta(qn, alpha=alpha, k=k)
             else:
                 tree_edges = ALGO_REGISTRY[algo_name](qn)
             
             build_time = time.time() - start_time
             print(f"\nTotal execution time: {build_time:.4f} seconds.")
 
+            try:
+                validate_no_dest_forwarding(qn, tree_edges, algo_name)
+            except ValueError as e:
+                print(f"[WARN] {e}")
+                continue
+
             if algo_name != "qsta":
                 placement_mode = DEFAULT_PLACEMENT_MODE.get(algo_name, "branch")
                 try:
-                    metrics = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k)
+                    metrics, b = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k)
                 except ValueError as e:
                     print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
                     continue
@@ -158,10 +186,16 @@ def main() -> None:
             tree_output_name = f"{algo_name}_{qn.name}"
             os.makedirs("tree_visualize", exist_ok=True)
             fig_path = os.path.join("tree_visualize", f"{tree_output_name}.png")
-            Debug.visualize_tree(
-                qn, tree_edges, output_name=tree_output_name,
-                save_path=fig_path, show=False,
-            )
+            if algo_name == "spt":
+                Debug.visualize_tree(
+                    qn, tree_edges, output_name=tree_output_name,
+                    save_path=fig_path, show=False,
+                )
+            else:
+                Debug.visualize_lqdc_tree(
+                    qn, tree_edges, b, output_name=tree_output_name,
+                    save_path=fig_path, show=False,
+                )
 
         run_results_sorted = sorted(run_results, key=lambda r: r["total_cost"])
         print(f"\n=== Summary of run {run_idx} (sorted by total_cost) ===")

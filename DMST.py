@@ -23,6 +23,16 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
     graph = qn.graph
     root = qn.s
     terminals = qn.D
+    qc_nodes = set(qn.B)
+
+    interior_graph = graph.copy()
+    interior_graph.remove_nodes_from(terminals)
+    interior_graph.add_edges_from(
+        (u, d, attrs)
+        for d in terminals
+        for u, _, attrs in graph.in_edges(d, data=True)
+        if u not in terminals
+    )
 
     # 最短路徑快取: dist, path
     _dist_cache: dict = {}
@@ -30,7 +40,7 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
 
     def shortest_paths_from(u):
         if u not in _dist_cache:
-            dist, path = nx.single_source_dijkstra(graph, u, weight="weight")
+            dist, path = nx.single_source_dijkstra(interior_graph, u, weight="weight")
             _dist_cache[u] = dist
             _path_cache[u] = path
         return _dist_cache[u], _path_cache[u]
@@ -78,7 +88,7 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
         dist_r, path_r = shortest_paths_from(r)
 
         best = None
-        for v in graph.nodes():
+        for v in qc_nodes:
             if v not in dist_r:
                 continue
             sub_edges, covered = B(level - 1, k_sub, v, X)

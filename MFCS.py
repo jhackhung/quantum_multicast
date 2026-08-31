@@ -3,14 +3,18 @@ from Graph import QuantumNetwork
 
 def build_mfcs_tree(qn: QuantumNetwork) -> set[tuple]:
     """MFCS baseline construction: RDJL
-    貪婪、漸進地把每個新的 destination，用最短路徑掛到目前森林中離它最近的既有節點
+    貪婪、漸進地把每個新的 destination，用最短路徑掛到目前森林中離它最近的既有節點。
     """
     graph = qn.graph
     root = qn.s
     D = set(qn.D)
+    B = set(qn.B)
 
     if not D:
         return set()
+
+    interior_graph = graph.copy()
+    interior_graph.remove_nodes_from(D)
 
     dist_root, _ = nx.single_source_dijkstra(graph, root, weight="weight")
     unreachable = D - set(dist_root)
@@ -23,8 +27,13 @@ def build_mfcs_tree(qn: QuantumNetwork) -> set[tuple]:
     tree_nodes = {root}
 
     for d in order:
+        g = interior_graph.copy()
+        g.add_edges_from(
+            (u, d, attrs) for u, _, attrs in graph.in_edges(d, data=True) if u not in (D - B) - {d}
+        )
+        sources = (tree_nodes & set(g.nodes())) - (D - B)
         _, path = nx.multi_source_dijkstra(
-            graph, sources=tree_nodes, target=d, weight="weight"
+            g, sources=sources, target=d, weight="weight"
         )
         for u, v in zip(path[:-1], path[1:]):
             tree.add_edge(u, v, weight=graph[u][v]["weight"])
