@@ -1,0 +1,13 @@
+{
+  "mode": "custom",
+  "gml_path": "sample_topology.gml",
+  "name": "sample_topology",
+  "num_dests": 7,
+  "pdqta_level": 4,
+  "alpha": 0.5,
+  "seed": 7,
+  "role_seed": 1,
+  "output_name": "sample_topology",
+  "step_dests": 5,
+  "num_runs": 1
+}
