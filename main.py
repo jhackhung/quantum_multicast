@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict
+import statistics
 import sys
 import json
 import os
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 
 import Graph
 from Graph import QuantumNetwork
-import networkx as nx   
+import networkx as nx
 import evaluate
 import CLEA
 import DMST
@@ -20,6 +21,17 @@ import QSTA
 import Debug
 
 CHECKPOINT_DIR = "checkpoints"
+EXPERIMENT_DIR = "experiment"
+
+STD_METRIC_KEYS = [
+    "transmission_cost",
+    "computation_cost",
+    "computation_cost_ratio",
+    "total_cost",
+    "no_lqdc_transmission_cost",
+    "no_lqdc_computation_cost",
+    "no_lqdc_total_cost",
+]
 
 def build_spt_tree(qn: QuantumNetwork) -> set[tuple]:
     # pred: {node: [pred1, pred2, ...]}
@@ -73,16 +85,66 @@ def validate_no_dest_forwarding(qn: QuantumNetwork, tree_edges: set[tuple], algo
             f"{sorted(str(u) for u in violators)}"
         )
 
-def save_results(results: list[dict], path: str) -> None:
+def upsert_results(results: list[dict], path: str) -> None:
+    """把 results 併入既有 csv：同 (graph, algo) 的舊列被取代，其餘列保留。
+    用於 experiment/ 彙整檔，讓同一個 num_dests 重跑時不會疊出重複列。"""
     if not results:
         return
+    existing: list[dict] = []
+    if os.path.exists(path):
+        with open(path, "r", newline="") as f:
+            existing = list(csv.DictReader(f))
+
+    new_keys = {(r["graph"], r["algo"]) for r in results}
+    kept = [r for r in existing if (r["graph"], r["algo"]) not in new_keys]
+    merged = kept + results
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    write_header = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
+    with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=results[0].keys())
-        if write_header:
-            writer.writeheader()
-        writer.writerows(results)
+        writer.writeheader()
+        writer.writerows(merged)
+
+def checkpoint_path(sweep_x: str, graph_name: str, alpha, num_dests: int) -> str:
+    return os.path.join(
+        CHECKPOINT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_d{num_dests}.json"
+    )
+
+def load_checkpoint(path: str) -> dict:
+    if not os.path.exists(path):
+        return {"runs": {}}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_checkpoint(path: str, state: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, path)
+
+def aggregate_runs(all_results: list[dict]) -> list[dict]:
+    """把多個 seed 的 raw rows 依 algo 分組，算出每個數值 metric 的 mean，並附上 *_std 欄位。"""
+    by_algo: Dict[str, list[dict]] = {}
+    for row in all_results:
+        by_algo.setdefault(row["algo"], []).append(row)
+
+    aggregated = []
+    for algo, rows in by_algo.items():
+        base = dict(rows[0])
+        base.pop("num_runs", None)
+        base.pop("timestamp", None)
+        base["num_runs"] = len(rows)
+        base["timestamp"] = datetime.now().isoformat(timespec="seconds")
+
+        for key in STD_METRIC_KEYS:
+            values = [r[key] for r in rows if key in r]
+            base[key] = statistics.mean(values)
+            base[f"{key}_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
+
+        aggregated.append(base)
+
+    return aggregated
 
 def main() -> None:
     if len(sys.argv) < 2:
@@ -116,30 +178,39 @@ def main() -> None:
         run_alpha(cfg, sweep_x, algos, num_runs, base_seed, k, alpha)
 
 def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_seed: int, k: int, alpha) -> None:
-    experiment_id = 0
-    all_results = []
+    graph_name = cfg.get("name", "result")
+    num_dests = cfg.get("num_dests", 0)
+    ckpt_path = checkpoint_path(sweep_x, graph_name, alpha, num_dests)
+    state = load_checkpoint(ckpt_path)
+    runs = state["runs"]  # {str(run_idx): [result_row, ...]}
+
     for run_idx in range(num_runs):
+        run_key = str(run_idx)
+        if run_key in runs:
+            print(f"\n[skip] run {run_idx + 1}/{num_runs} (seed={base_seed + run_idx}) already in checkpoint")
+            continue
+
         variant_cfg = dict(cfg)
         variant_cfg["seed"] = base_seed + run_idx
-        
+
         print("\n" + "=" * 70)
         print(f"Run {run_idx + 1}/{num_runs}, seed={variant_cfg['seed']}")
         print("=" * 70)
-        
+
         qn = Graph.build_network(variant_cfg)
-        
+
         print(qn.summary())
-        
+
         run_results = []
         for algo_name in algos:
             print(f"\n--- Building {algo_name.upper()} tree for {qn.name} (run {run_idx})... ---")
             start_time = time.time()
-            
+
             if algo_name == "qsta":
                 tree_edges, metrics, b = QSTA.build_and_evaluate_qsta(qn, alpha=alpha, k=k)
             else:
                 tree_edges = ALGO_REGISTRY[algo_name](qn)
-            
+
             build_time = time.time() - start_time
             print(f"\nTotal execution time: {build_time:.4f} seconds.")
 
@@ -156,7 +227,7 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
                 except ValueError as e:
                     print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
                     continue
-            
+
             print(
                 f"num_edges = {len(tree_edges)}, "
                 f"total_cost = {metrics['total_cost']:.4f} "
@@ -164,38 +235,23 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
                 f"computation = {metrics['computation_cost']:.4f}), "
                 f"no_lqdc_total_cost = {metrics['no_lqdc_total_cost']:.4f}"
             )
-            
+
             result_row = {
-                "experiment_id": experiment_id,
                 "timestamp":  datetime.now().isoformat(timespec="seconds"),
                 "graph": f"{qn.name}_d{len(qn.D)}_b{len(qn.B)}",
                 "algo": algo_name.upper(),
-                # "num_dests": len(qn.D),
-                # "num_qc": len(qn.B),
                 "num_runs": run_idx,
                 "base_seed": base_seed,
                 "build_time_sec": build_time,
-                # "num_edges": len(tree_edges),
                 **metrics,
             }
-            experiment_id += 1
-            
+
             run_results.append(result_row)
-            all_results.append(result_row)
-            
-            tree_output_name = f"{algo_name}_{qn.name}"
-            os.makedirs("tree_visualize", exist_ok=True)
-            fig_path = os.path.join("tree_visualize", f"{tree_output_name}.png")
-            if algo_name == "spt":
-                Debug.visualize_tree(
-                    qn, tree_edges, output_name=tree_output_name,
-                    save_path=fig_path, show=False,
-                )
-            else:
-                Debug.visualize_lqdc_tree(
-                    qn, tree_edges, b, output_name=tree_output_name,
-                    save_path=fig_path, show=False,
-                )
+
+            # checkpoint after every algo, so a mid-run interruption only
+            # loses the current algo, not the whole seed
+            runs[run_key] = run_results
+            save_checkpoint(ckpt_path, state)
 
         run_results_sorted = sorted(run_results, key=lambda r: r["total_cost"])
         print(f"\n=== Summary of run {run_idx} (sorted by total_cost) ===")
@@ -206,11 +262,14 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
                 f"{r['no_lqdc_total_cost']:>16.4f}"
                 f"{r['lqdc_cost_savings_ratio']:>16.2%}"
             )
-    
-    graph_name = cfg.get("name", "result")
-    output_path = os.path.join(CHECKPOINT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}.csv")
-    save_results(all_results, output_path)
-    print(f"\nSaved {len(all_results)} rows to {output_path}")
-    
+
+    all_results = [row for run_key in sorted(runs, key=int) for row in runs[run_key]]
+    aggregated = aggregate_runs(all_results)
+
+    os.makedirs(EXPERIMENT_DIR, exist_ok=True)
+    output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}.csv")
+    upsert_results(aggregated, output_path)
+    print(f"\nAggregated {len(all_results)} raw rows across {len(runs)} run(s) -> {len(aggregated)} rows in {output_path}")
+
 if __name__ == "__main__":
     main()

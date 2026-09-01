@@ -3,3 +3,4 @@ __pycache__/*
 output_graph/*
 tree_visualize/*
 checkpoints_old/*
+checkpoints/*

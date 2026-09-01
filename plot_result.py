@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Plot cost comparison across algorithms from checkpoints/*.csv results.
+"""Plot cost comparison across algorithms from experiment/*.csv results.
+
+If the CSV has "<metric>_std" columns (multi-seed runs aggregated by
+main.py), error bars are drawn automatically; otherwise plain lines.
 
 Usage:
-    python plot_result.py checkpoints/dests_TATA_alpha_10.csv --x dests
-    python plot_result.py checkpoints/dests_TATA_alpha_*.csv --x alpha --fixed-dests 30
+    python plot_result.py experiment/dests_TATA_alpha_10.csv --x dests
+    python plot_result.py experiment/dests_TATA_alpha_*.csv --x alpha --fixed-dests 30
 """
 import sys
 import os
@@ -12,7 +15,7 @@ import argparse
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 
 matplotlib.use("Agg")
 
@@ -50,7 +53,7 @@ METRICS = {
     "total_cost": "Total Cost",
     "transmission_cost": "Transmission Cost",
     "computation_cost": "Computation Cost",
-    "computation_cost_ratio": "Computation Cost Ratio",
+    "computation_cost_ratio": "Rate of Computation Cost",
 }
 
 
@@ -104,25 +107,48 @@ def load_alpha_mode(paths: list[str], fixed_dests: int | None) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def plot_metric(df: pd.DataFrame, metric: str, x_col: str, x_label: str, output_path: str) -> None:
+def plot_metric(df: pd.DataFrame, metric: str, x_col: str, x_label: str, output_path: str, x_step: float | None = None) -> None:
     fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
+
+    std_col = f"{metric}_std"
+    has_std = std_col in df.columns
 
     for algo in ALGOS:
         df_algo = df[df["algo"] == algo].sort_values(x_col)
-        df_algo = df_algo.groupby(x_col, as_index=False)[metric].mean()
+        agg = {metric: "mean"}
+        if has_std:
+            # multiple rows per x (e.g. several num_dests sweeps) are combined
+            # by taking the root-mean-square of their std, since the per-row
+            # std already summarizes that row's own seed spread
+            agg[std_col] = lambda s: (s.pow(2).mean()) ** 0.5
+        df_algo = df_algo.groupby(x_col, as_index=False).agg(agg)
         if df_algo.empty:
             continue
-        ax.plot(
-            df_algo[x_col],
-            df_algo[metric],
-            label=algo,
-            markersize=7,
-            **STYLES[algo],
-        )
+        if has_std:
+            ax.errorbar(
+                df_algo[x_col],
+                df_algo[metric],
+                yerr=df_algo[std_col],
+                label=algo,
+                markersize=7,
+                capsize=4,
+                elinewidth=1.2,
+                **STYLES[algo],
+            )
+        else:
+            ax.plot(
+                df_algo[x_col],
+                df_algo[metric],
+                label=algo,
+                markersize=7,
+                **STYLES[algo],
+            )
 
     ax.set_xlabel(x_label)
     ax.set_ylabel(METRICS[metric])
     ax.grid(True, linestyle="--", alpha=0.6)
+    if x_step is not None:
+        ax.xaxis.set_major_locator(MultipleLocator(x_step))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
     ax.legend(
         loc="lower center",
@@ -146,6 +172,7 @@ def main() -> None:
     parser.add_argument("csv_paths", nargs="+", help="Path(s) to checkpoints/*.csv result file(s).")
     parser.add_argument("--x", choices=["dests", "alpha"], required=True, help="X-axis type.")
     parser.add_argument("--fixed-dests", type=int, default=None, help="For --x alpha: fixed num_dests to filter on.")
+    parser.add_argument("--step", type=float, default=None, help="X-axis tick spacing (e.g. --step 5).")
     parser.add_argument("--out-dir", default="img", help="Output directory for figures (default: img/).")
     args = parser.parse_args()
 
@@ -172,7 +199,7 @@ def main() -> None:
 
     for metric in METRICS:
         output_path = os.path.join(out_dir, f"{os.path.basename(out_dir)}_{metric}.png")
-        plot_metric(df, metric, x_col, x_label, output_path)
+        plot_metric(df, metric, x_col, x_label, output_path, x_step=args.step)
 
     print("All plots generated successfully.")
 

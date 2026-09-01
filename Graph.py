@@ -177,15 +177,6 @@ def _parse_topology_zoo_gml(path: str):
  
     return nodes, edges
 
-def _haversine_km(lat1, lon1, lat2, lon2) -> float:
-    """地球表面兩個經緯度座標之間的直線球面距離 (單位km)"""
-    R = 6371.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlmb = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
-    return 2 * R * math.asin(math.sqrt(a))
-
 def load_real_network(
     gml_path: str,
     name: str = "",
@@ -194,61 +185,27 @@ def load_real_network(
     rng: random.Random | None = None,
 ) -> nx.DiGraph:
     """Load a Topology Zoo GML file (ITCD/TATA .gml) into a weighted bidirectional DiGraph.
- 
-    Edge weight = delay in ms, derived from great-circle distance between
-    endpoints and linearly rescaled to [delay_min_ms, delay_max_ms] across
-    this network's own edges.
- 
-    Nodes missing lat/lon (a handful of entries in the raw Topology Zoo
-    files) fall back to a distance randomly drawn from the empirical
-    distribution of known edge distances, so they don't distort the min/max
-    used for rescaling. This is a necessary implementation choice not
-    specified by the paper.
+
+    Edge weight is a random value in [0, 1) drawn independently per direction
+    (u->v and v->u get different weights), not derived from delay/distance.
+    delay_min_ms/delay_max_ms are accepted for call-site compatibility but
+    unused.
     """
     rng = rng or random.Random(0)
     raw_nodes, raw_edges = _parse_topology_zoo_gml(gml_path)
- 
-    known_dists = []
-    edge_dist = {}
-    for u, v in raw_edges:
-        if u == v:
-            continue
-        nu, nv = raw_nodes.get(u), raw_nodes.get(v)
-        if nu and nv and nu["lat"] is not None and nv["lat"] is not None:
-            d = _haversine_km(nu["lat"], nu["lon"], nv["lat"], nv["lon"])
-            edge_dist[(u, v)] = d
-            known_dists.append(d)
- 
-    if not known_dists:
-        raise ValueError(f"No node coordinates found in {gml_path}; cannot derive delay weights.")
- 
-    fallback_pool = known_dists  # sample from empirical distances for missing coords
- 
+
     G = nx.DiGraph()
     for nid, attrs in raw_nodes.items():
         G.add_node(nid, label=attrs["label"], lat=attrs["lat"], lon=attrs["lon"])
- 
-    dists = []
-    pair_dists = {}
+
     seen = set()
     for u, v in raw_edges:
         if u == v or (u, v) in seen or (v, u) in seen:
             continue  # drop self-loops and duplicate parallel edges
         seen.add((u, v))
-        d = edge_dist.get((u, v)) or edge_dist.get((v, u))
-        if d is None:
-            d = rng.choice(fallback_pool)
-        pair_dists[(u, v)] = d
-        dists.append(d)
- 
-    dmin, dmax = min(dists), max(dists)
-    span = (dmax - dmin) or 1.0
- 
-    for (u, v), d in pair_dists.items():
-        delay = delay_min_ms + (d - dmin) / span * (delay_max_ms - delay_min_ms)
-        G.add_edge(u, v, weight=delay)
-        G.add_edge(v, u, weight=delay)  # physical links are bidirectional
- 
+        G.add_edge(u, v, weight=rng.random())
+        G.add_edge(v, u, weight=rng.random())  # asymmetric per-direction weight
+
     G.graph["name"] = name
     return G
 
@@ -277,7 +234,7 @@ def load_custom_network(gml_path: str) -> QuantumNetwork:
 def generate_synthetic_network(
     num_nodes: int = 500,
     area_size: float = 20.0,
-    waxman_alpha: float = 0.4,
+    waxman_alpha: float = 0.15,
     waxman_beta: float = 10.0,
     delay_min_ms: float = 10.0,
     delay_max_ms: float = 100.0,
@@ -289,11 +246,13 @@ def generate_synthetic_network(
         - edge (u, v) exists with probability
               P(u, v) = waxman_alpha * exp(-waxman_beta * d(u,v) / L)
           where d(u, v) is Euclidean distance and L is the maximum pairwise
-          distance among all nodes (default alpha=0.4, beta=10, matching
-          "0.4 * e^(-10 d / L)" in the paper).
-        - edge weight is proportional to distance; we use the raw Euclidean
-          distance as the weight (proportionality constant = 1), since the
-          paper only specifies proportionality, not an absolute scale.
+          distance among all nodes (paper reference: alpha=0.4, beta=10, i.e.
+          "0.4 * e^(-10 d / L)"; default alpha lowered to 0.15 here to make
+          the generated graph sparser).
+        - edge weight is a random value in [0, 1) drawn independently per
+          direction (u->v and v->u get different weights), not derived from
+          distance/delay. delay_min_ms/delay_max_ms are accepted for
+          call-site compatibility but unused.
     """
     rng = random.Random(seed)
     positions = {i: (rng.uniform(0, area_size), rng.uniform(0, area_size)) for i in range(num_nodes)}
@@ -337,22 +296,13 @@ def generate_synthetic_network(
             bridge_dists[(u, v)] = d
             main_component = main_component | comp
     
-    all_dists = list(pair_dists.values()) + list(bridge_dists.values())
-    dmin = min(all_dists, default=1.0)
-    dmax = max(all_dists, default=1.0)
-    span = (dmax - dmin) or 1.0
-
-    def to_delay(d):
-        return delay_min_ms + (d - dmin) / span * (delay_max_ms - delay_min_ms)
-
     G = nx.DiGraph()
     for i in range(num_nodes):
         G.add_node(i, x=positions[i][0], y=positions[i][1])
 
-    for (u, v), d in {**pair_dists, **bridge_dists}.items():
-        delay = to_delay(d)
-        G.add_edge(u, v, weight=delay)
-        G.add_edge(v, u, weight=delay)
+    for (u, v) in {**pair_dists, **bridge_dists}.keys():
+        G.add_edge(u, v, weight=rng.random())
+        G.add_edge(v, u, weight=rng.random())  # asymmetric per-direction weight
 
     G.graph["name"] = f"synthetic_n{num_nodes}"
     return G
@@ -384,7 +334,7 @@ def build_network(config: dict) -> QuantumNetwork:
         G = generate_synthetic_network(
             num_nodes=config.get("num_nodes", 500),
             area_size=config.get("area_size", 20.0),
-            waxman_alpha=config.get("waxman_alpha", 0.4),
+            waxman_alpha=config.get("waxman_alpha", 0.15),
             waxman_beta=config.get("waxman_beta", 10.0),
             delay_min_ms=config.get("delay_min_ms", 10.0),
             delay_max_ms=config.get("delay_max_ms", 100.0),
