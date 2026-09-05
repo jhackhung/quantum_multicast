@@ -5,11 +5,11 @@
   "delay_min_ms": 10.0,
   "delay_max_ms": 100.0,
   "num_dests": 20,
-  "alpha": 150, 
-  "seed": 0,
+  "alpha": 2, 
+  "seed": 1,
   "role_seed": 1,
   "output_name": "itcd_d30_qc120",
   "step_dests": 5,
-  "num_runs": 1,
+  "num_runs": 100,
   "_comment": "can set \"num_qc\": 120, to specify the number of quantum computers"
 }

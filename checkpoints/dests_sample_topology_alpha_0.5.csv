@@ -1,7 +1,0 @@
-experiment_id,timestamp,graph,algo,num_runs,base_seed,build_time_sec,placement_mode,transmission_cost,computation_cost,total_cost,computation_cost_ratio,num_activated_nodes,no_lqdc_transmission_cost,no_lqdc_computation_cost,no_lqdc_total_cost,lqdc_cost_savings,lqdc_cost_savings_ratio,k
-0,2026-08-31T17:22:31,sample_topology_d7_b6,SPT,0,7,0.000158548,none,88,0,88,0,0,88,0,88,0,0,4
-1,2026-08-31T17:22:31,sample_topology_d7_b6,CLEA,0,7,0.002445698,branch,58,2.5,60.5,0.041322314,5,91,0,91,30.5,0.335164835,4
-2,2026-08-31T17:22:31,sample_topology_d7_b6,DMST,0,7,0.002051353,branch,69,2.5,71.5,0.034965035,5,88,0,88,16.5,0.1875,4
-3,2026-08-31T17:22:32,sample_topology_d7_b6,KMB,0,7,0.001321316,branch,67,1.5,68.5,0.02189781,3,118,0,118,49.5,0.419491525,4
-4,2026-08-31T17:22:32,sample_topology_d7_b6,MFCS,0,7,0.000459194,branch,63,3,66,0.045454545,6,88,0,88,22,0.25,4
-5,2026-08-31T17:22:32,sample_topology_d7_b6,QSTA,0,7,0.113751411,explicit,58,2.5,60.5,0.041322314,5,91,0,91,30.5,0.335164835,4
