@@ -34,20 +34,23 @@ STD_METRIC_KEYS = [
 ]
 
 def build_spt_tree(qn: QuantumNetwork) -> set[tuple]:
-    # pred: {node: [pred1, pred2, ...]}
-    pred, _ = nx.dijkstra_predecessor_and_distance(qn.graph, qn.s, weight="weight")
-
+    """每個 destination 各自沿最短路徑接到 source，但路徑必須避開其他
+    destination（destination 不能轉發），故對每個 d 各自在排除
+    「其他 destination」的子圖上跑一次 Dijkstra。"""
     tree_edges = set()
     for d in qn.D:
+        search_graph = qn.graph.subgraph(qn.V - (qn.D - {d}))
+        pred, _ = nx.dijkstra_predecessor_and_distance(search_graph, qn.s, weight="weight")
+
         v = d
         while v != qn.s:
             candidates = pred.get(v)
             if not candidates:
-                raise ValueError(f"destination {d} unreachable from source {qn.s}")
+                raise ValueError(f"destination {d} unreachable from source {qn.s} without routing through another destination")
             u = min(candidates)  # deterministic tie-break
             tree_edges.add((u, v))
             v = u
-    
+
     return tree_edges
 
 ALGO_REGISTRY = {
@@ -60,7 +63,7 @@ ALGO_REGISTRY = {
 }
 
 DEFAULT_PLACEMENT_MODE: Dict[str, str] = {
-    "spt": "none",
+    "spt": "branch",
     "clea": "branch",
     "dmst": "branch",
     "kmb": "branch",
@@ -177,6 +180,14 @@ def main() -> None:
         print("#" * 70)
         run_alpha(cfg, sweep_x, algos, num_runs, base_seed, k, alpha)
 
+def mark_attempted(attempted: dict, run_key: str, algo_name: str, ckpt_path: str, state: dict) -> None:
+    """記錄某個 (run_key, algo_name) 已經跑過（不論成功或因協定違規被跳過），
+    並立即存檔"""
+    algos_done = attempted.setdefault(run_key, [])
+    if algo_name not in algos_done:
+        algos_done.append(algo_name)
+    save_checkpoint(ckpt_path, state)
+
 def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_seed: int, k: int, alpha) -> None:
     graph_name = cfg.get("name", "result")
     num_dests = cfg.get("num_dests", 0)
@@ -184,9 +195,13 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
     state = load_checkpoint(ckpt_path)
     runs = state["runs"]  # {str(run_idx): [result_row, ...]}
 
+    attempted = state.setdefault("attempted_algos", {})  # {str(run_idx): [algo_name, ...]}
+
     for run_idx in range(num_runs):
         run_key = str(run_idx)
-        if run_key in runs:
+        already_attempted = set(attempted.get(run_key, []))
+        pending_algos = [a for a in algos if a not in already_attempted]
+        if run_key in runs and not pending_algos:
             print(f"\n[skip] run {run_idx + 1}/{num_runs} (seed={base_seed + run_idx}) already in checkpoint")
             continue
 
@@ -201,8 +216,8 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
 
         print(qn.summary())
 
-        run_results = []
-        for algo_name in algos:
+        run_results = list(runs.get(run_key, []))  # 保留這個 seed 之前已經跑好的 algo 結果
+        for algo_name in pending_algos:
             print(f"\n--- Building {algo_name.upper()} tree for {qn.name} (run {run_idx})... ---")
             start_time = time.time()
 
@@ -218,6 +233,7 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
                 validate_no_dest_forwarding(qn, tree_edges, algo_name)
             except ValueError as e:
                 print(f"[WARN] {e}")
+                mark_attempted(attempted, run_key, algo_name, ckpt_path, state)
                 continue
 
             if algo_name != "qsta":
@@ -226,6 +242,7 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
                     metrics, b = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k)
                 except ValueError as e:
                     print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
+                    mark_attempted(attempted, run_key, algo_name, ckpt_path, state)
                     continue
 
             print(
@@ -251,7 +268,7 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
             # checkpoint after every algo, so a mid-run interruption only
             # loses the current algo, not the whole seed
             runs[run_key] = run_results
-            save_checkpoint(ckpt_path, state)
+            mark_attempted(attempted, run_key, algo_name, ckpt_path, state)
 
         run_results_sorted = sorted(run_results, key=lambda r: r["total_cost"])
         print(f"\n=== Summary of run {run_idx} (sorted by total_cost) ===")

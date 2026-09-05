@@ -106,7 +106,8 @@ class QuantumNetwork:
 
 def _build_shortest_path_tree_leaves(graph: nx.DiGraph, s: object) -> list:
     """以 s 為根跑一次不受限的 Dijkstra，取得樹狀結構的葉節點清單。
-    只有葉節點可以安全地當 D 候選，D 無法 transmit to other nodes.
+    這些節點在 s 的最短路徑樹上沒有子節點，通常離主幹/hub 較近，
+    是比較「安全」也對 QSTA 之類的 hub-spoke 演算法較友善的 D 候選。
     """
     pred, _ = nx.dijkstra_predecessor_and_distance(graph, s, weight="weight")
 
@@ -118,27 +119,74 @@ def _build_shortest_path_tree_leaves(graph: nx.DiGraph, s: object) -> list:
         has_children.add(u)
 
     reachable_non_source = set(pred.keys()) - {s}
-    leaves = [v for v in reachable_non_source if v not in has_children]
-    return leaves
+    return [v for v in reachable_non_source if v not in has_children]
+
+def _is_safe_destination_set(graph: nx.DiGraph, nodes: set, s: object, D: set) -> bool:
+    """候選 D 集合是否讓下游演算法仍有解：
+    1. 挖掉 D 後，s 仍能到達所有的 B (= nodes - D)。
+    2. 每個 d in D，都能從某個 terminal 在避開其他 D 節點的情況下
+       到達 d（CLEA 用來把每個 destination 接上樹的必要條件）。
+    """
+    B = nodes - D
+    backbone = graph.subgraph(B)
+    if not (B - {s}) <= (nx.descendants(backbone, s) | {s}):
+        return False
+
+    terminals = {s} | B
+    for d in D:
+        search_graph = graph.subgraph(nodes - (D - {d}))
+        if not any(
+            d in (nx.descendants(search_graph, t) | {t}) for t in terminals
+        ):
+            return False
+    return True
 
 def assign_roles(
     graph: nx.DiGraph,
     num_destinations: int,
     rng: random.Random,
 ) -> QuantumNetwork:
-    """既有圖上指派 B / s / D，並保證 QCN 可達性"""
-    nodes = list(graph.nodes())
-    s = rng.choice(nodes)
+    """既有圖上指派 B / s / D，並保證 QCN 可達性。
 
-    leaves = _build_shortest_path_tree_leaves(graph, s)
-    if num_destinations > len(leaves):
+    候選走訪順序分兩層：先試 SPT 葉節點（打散順序），這類節點通常離
+    hub/主幹較近，對 hub-spoke 型演算法（QSTA）較友善；葉節點候選用盡後，
+    才繼續嘗試其餘可達節點。兩層都用同一套貪婪安全選取（_is_safe_destination_set）
+    決定是否正式收下，D 數量不受限於葉節點候選數。
+    """
+    nodes = set(graph.nodes())
+    s = rng.choice(sorted(nodes, key=str))
+
+    reachable = nx.descendants(graph, s)
+    if num_destinations > len(reachable):
         raise ValueError(
-            f"num_destinations ({num_destinations}) exceeds the number of tree-leaf "
-            f"candidates ({len(leaves)}) from source {s}. The shortest-path tree from "
-            f"this source doesn't branch enough to support this many QCN-safe destinations. "
+            f"num_destinations ({num_destinations}) exceeds the number of nodes "
+            f"reachable from source {s} ({len(reachable)})."
         )
-    D = set(rng.sample(leaves, num_destinations))
-    B = set(nodes) - D
+
+    leaves = sorted(set(_build_shortest_path_tree_leaves(graph, s)), key=str)
+    rng.shuffle(leaves)
+    rest = sorted(reachable - set(leaves), key=str)
+    rng.shuffle(rest)
+    candidates = leaves + rest  # 先試葉節點，用盡後才試其餘可達節點
+
+    D = set()
+    deferred = []
+    for node in candidates:
+        if len(D) >= num_destinations:
+            break
+        trial = D | {node}
+        if _is_safe_destination_set(graph, nodes, s, trial):
+            D = trial
+        else:
+            deferred.append(node)
+
+    # 安全候選不夠湊滿，從被跳過的節點裡補（可能讓下游演算法無解）
+    for node in deferred:
+        if len(D) >= num_destinations:
+            break
+        D.add(node)
+
+    B = nodes - D
     return QuantumNetwork(graph=graph, B=B, D=D, s=s)
 
 def _parse_topology_zoo_gml(path: str):
@@ -177,6 +225,16 @@ def _parse_topology_zoo_gml(path: str):
  
     return nodes, edges
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two (lat, lon) points in km."""
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = (math.sin(dphi / 2) ** 2
+         + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2)
+    return 2 * R * math.asin(math.sqrt(a))
+
 def load_real_network(
     gml_path: str,
     name: str = "",
@@ -199,13 +257,41 @@ def load_real_network(
         G.add_node(nid, label=attrs["label"], lat=attrs["lat"], lon=attrs["lon"])
 
     seen = set()
+    unique_edges = []
     for u, v in raw_edges:
         if u == v or (u, v) in seen or (v, u) in seen:
             continue  # drop self-loops and duplicate parallel edges
         seen.add((u, v))
-        G.add_edge(u, v, weight=rng.random())
-        G.add_edge(v, u, weight=rng.random())  # asymmetric per-direction weight
+        unique_edges.append((u, v))
+        
+    dists = {}
+    for u, v in unique_edges:
+        lat_u, lon_u = raw_nodes[u]["lat"], raw_nodes[u]["lon"]
+        lat_v, lon_v = raw_nodes[v]["lat"], raw_nodes[v]["lon"]
+        if None not in (lat_u, lon_u, lat_v, lon_v):
+            d = _haversine_km(lat_u, lon_u, lat_v, lon_v)
+            dists[(u, v)] = d
+            dists[(v, u)] = d
 
+    d_min = min(dists.values()) if dists else 0.0
+    d_max = max(dists.values()) if dists else 1.0
+    d_range = (d_max - d_min) or 1.0
+    
+    ASYM_LOW, ASYM_HIGH = 0.7, 1.3
+    EPSILON = 1e-6
+
+    def _direction_weight(u, v) -> float:
+        if (u, v) in dists:
+            base = (dists[(u, v)] - d_min) / d_range # normalized distance in [0, 1]
+            asymmetry = rng.uniform(ASYM_LOW, ASYM_HIGH)
+            raw = (base * asymmetry) / ASYM_HIGH
+            return max(raw, EPSILON) # avoid zero-weight edges
+        return rng.random()
+
+    for u, v in unique_edges:
+        G.add_edge(u, v, weight=_direction_weight(u, v))
+        G.add_edge(v, u, weight=_direction_weight(v, u))    # independently drawn -> stays asymmetric
+    
     G.graph["name"] = name
     return G
 
@@ -295,14 +381,30 @@ def generate_synthetic_network(
             d, u, v = best
             bridge_dists[(u, v)] = d
             main_component = main_component | comp
+            
+    all_dists = {**pair_dists, **bridge_dists}
+    dist_values = list(all_dists.values())
+    d_min = min(dist_values)
+    d_max = max(dist_values)
+    d_range = (d_max - d_min) or 1.0
+    
+    NOISE_AMP = 0.3
+    EPSILON = 1e-6
+    
+    def _synthetic_direction_weight(d: float) -> float:
+        base = (d - d_min) / d_range
+        noise = rng.uniform(-NOISE_AMP, NOISE_AMP)
+        raw = base + noise
+        rescaled = (raw + NOISE_AMP) / (1 + 2 * NOISE_AMP)
+        return max(min(rescaled, 1.0), EPSILON)
     
     G = nx.DiGraph()
     for i in range(num_nodes):
         G.add_node(i, x=positions[i][0], y=positions[i][1])
 
-    for (u, v) in {**pair_dists, **bridge_dists}.keys():
-        G.add_edge(u, v, weight=rng.random())
-        G.add_edge(v, u, weight=rng.random())  # asymmetric per-direction weight
+    for (u, v), d in all_dists.items():
+        G.add_edge(u, v, weight=_synthetic_direction_weight(d))
+        G.add_edge(v, u, weight=_synthetic_direction_weight(d))  # asymmetric per-direction weight
 
     G.graph["name"] = f"synthetic_n{num_nodes}"
     return G
