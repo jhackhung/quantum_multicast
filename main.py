@@ -21,7 +21,7 @@ import QSTA
 import Debug
 
 CHECKPOINT_DIR = "checkpoints"
-EXPERIMENT_DIR = "experiment"
+EXPERIMENT_DIR = "experiment/distance_weighted_SPT_branch"
 
 STD_METRIC_KEYS = [
     "transmission_cost",
@@ -108,9 +108,9 @@ def upsert_results(results: list[dict], path: str) -> None:
         writer.writeheader()
         writer.writerows(merged)
 
-def checkpoint_path(sweep_x: str, graph_name: str, alpha, num_dests: int) -> str:
+def checkpoint_path(sweep_x: str, graph_name: str, alpha, num_nodes: int, num_dests: int, k: int) -> str:
     return os.path.join(
-        CHECKPOINT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_d{num_dests}.json"
+        CHECKPOINT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_n{num_nodes}_d{num_dests}_k_{k}.json"
     )
 
 def load_checkpoint(path: str) -> dict:
@@ -190,8 +190,9 @@ def mark_attempted(attempted: dict, run_key: str, algo_name: str, ckpt_path: str
 
 def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_seed: int, k: int, alpha) -> None:
     graph_name = cfg.get("name", "result")
+    num_nodes = cfg.get("num_nodes", 100)
     num_dests = cfg.get("num_dests", 0)
-    ckpt_path = checkpoint_path(sweep_x, graph_name, alpha, num_dests)
+    ckpt_path = checkpoint_path(sweep_x, graph_name, alpha, num_nodes, num_dests, k)
     state = load_checkpoint(ckpt_path)
     runs = state["runs"]  # {str(run_idx): [result_row, ...]}
 
@@ -284,7 +285,7 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
     aggregated = aggregate_runs(all_results)
 
     os.makedirs(EXPERIMENT_DIR, exist_ok=True)
-    output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}.csv")
+    output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_k_{k}.csv")
     upsert_results(aggregated, output_path)
     print(f"\nAggregated {len(all_results)} raw rows across {len(runs)} run(s) -> {len(aggregated)} rows in {output_path}")
 

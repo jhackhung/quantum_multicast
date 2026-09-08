@@ -65,6 +65,14 @@ def parse_dests_from_graph(df: pd.DataFrame) -> pd.Series:
     return extracted.astype(int)
 
 
+def parse_num_b_from_graph(df: pd.DataFrame) -> pd.Series:
+    extracted = df["graph"].astype(str).str.extract(r"_b(\d+)$")[0]
+    if extracted.isna().any():
+        bad = df.loc[extracted.isna(), "graph"].unique().tolist()
+        raise ValueError(f"Cannot parse |B| from graph values: {bad}")
+    return extracted.astype(int)
+
+
 def extract_alpha_from_path(path: str) -> float:
     match = re.search(r"alpha_([0-9]+(?:\.[0-9]+)?)", os.path.basename(path))
     if not match:
@@ -83,6 +91,18 @@ def format_number_label(value) -> str:
 def load_dests_mode(excel_path: str) -> pd.DataFrame:
     df = pd.read_csv(excel_path)
     df["num_dests"] = parse_dests_from_graph(df)
+    return df
+
+
+def load_qc_mode(excel_path: str, start_node: int | None, end_node: int | None) -> pd.DataFrame:
+    df = pd.read_csv(excel_path)
+    df["num_b"] = parse_num_b_from_graph(df)
+    if start_node is not None:
+        df = df[df["num_b"] >= start_node]
+    if end_node is not None:
+        df = df[df["num_b"] <= end_node]
+    if df.empty:
+        raise ValueError("No rows found in the given |B| range.")
     return df
 
 
@@ -170,8 +190,10 @@ def plot_metric(df: pd.DataFrame, metric: str, x_col: str, x_label: str, output_
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot cost metrics vs dests or alpha from checkpoints CSVs.")
     parser.add_argument("csv_paths", nargs="+", help="Path(s) to checkpoints/*.csv result file(s).")
-    parser.add_argument("--x", choices=["dests", "alpha"], required=True, help="X-axis type.")
+    parser.add_argument("--x", choices=["dests", "alpha", "qc"], required=True, help="X-axis type.")
     parser.add_argument("--fixed-dests", type=int, default=None, help="For --x alpha: fixed num_dests to filter on.")
+    parser.add_argument("--start-node", type=int, default=None, help="For --x qc: minimum |B| (num_nodes - num_dests) to include.")
+    parser.add_argument("--end-node", type=int, default=None, help="For --x qc: maximum |B| to include.")
     parser.add_argument("--step", type=float, default=None, help="X-axis tick spacing (e.g. --step 5).")
     parser.add_argument("--out-dir", default="img", help="Output directory for figures (default: img/).")
     args = parser.parse_args()
@@ -189,11 +211,22 @@ def main() -> None:
         x_col, x_label = "num_dests", "Number of Destinations"
         name = os.path.splitext(os.path.basename(args.csv_paths[0]))[0]
         out_dir = os.path.join(args.out_dir, f"{name}_dests")
+    elif args.x == "qc":
+        if len(args.csv_paths) != 1:
+            print("--x qc accepts exactly one CSV file (a single qc-sweep result).")
+            sys.exit(1)
+        df = load_qc_mode(args.csv_paths[0], args.start_node, args.end_node)
+        x_col, x_label = "num_b", "|B|"
+        name = os.path.splitext(os.path.basename(args.csv_paths[0]))[0]
+        out_dir = os.path.join(args.out_dir, f"{name}_qc")
     else:
         df = load_alpha_mode(args.csv_paths, args.fixed_dests)
         x_col, x_label = "alpha", "Alpha (α)"
         fixed_label = args.fixed_dests if args.fixed_dests is not None else "all"
-        out_dir = os.path.join(args.out_dir, f"alpha_sweep_dests_{fixed_label}")
+        name = os.path.splitext(os.path.basename(args.csv_paths[0]))[0]
+        if name.startswith("dests_"):
+            name = name.split("_")[1]
+        out_dir = os.path.join(args.out_dir, f"alpha_{name}_dests_{fixed_label}")
 
     os.makedirs(out_dir, exist_ok=True)
 
