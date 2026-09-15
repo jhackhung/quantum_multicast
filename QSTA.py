@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import heapq
+import itertools
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple, FrozenSet
@@ -17,10 +18,13 @@ def _restricted_dijkstra(qn: QuantumNetwork, source: object):
     dist: Dict[object, float] = {source: 0.0}
     pred: Dict[object, object] = {}
     visited: Set[object] = set()
-    heap: List[Tuple[float, object]] = [(0.0, source)]
+    # counter 當 tie-breaker：節點 id 在 real topology 是 int、外掛 destination
+    # 是 str，距離相同時直接比節點會 TypeError（networkx 內部同樣做法）
+    counter = itertools.count()
+    heap: List[Tuple[float, int, object]] = [(0.0, next(counter), source)]
 
     while heap:
-        d_u, u = heapq.heappop(heap)
+        d_u, _, u = heapq.heappop(heap)
         if u in visited:
             continue
         visited.add(u)
@@ -31,7 +35,7 @@ def _restricted_dijkstra(qn: QuantumNetwork, source: object):
             if nd < dist.get(v, math.inf):
                 dist[v] = nd
                 pred[v] = u
-                heapq.heappush(heap, (nd, v))
+                heapq.heappush(heap, (nd, next(counter), v))
 
     return dist, pred
 

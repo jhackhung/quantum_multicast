@@ -50,7 +50,7 @@ def build_kmb_tree(qn: QuantumNetwork) -> set[tuple]:
             raise ValueError(
                 f"destination {d} has no reachable LQDC-capable proxy node in B"
             )
-        _, proxy = min(candidates)
+        _, proxy = min(candidates, key=lambda t: (t[0], str(t[1])))
         proxy_of[d] = proxy
         attach_path[d] = path[proxy]
         

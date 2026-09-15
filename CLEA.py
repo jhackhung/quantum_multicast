@@ -173,7 +173,7 @@ def build_clea_tree(qn: QuantumNetwork) -> set[tuple]:
         raise ValueError(
             f"LQDC-capable nodes unreachable from source {qn.s} "
             f"without routing through a destination: "
-            f"{sorted(unreachable_terminals)}"
+            f"{sorted(map(str, unreachable_terminals))}"
         )
 
     in_edges, terminal_pred_maps = _build_terminal_metric_closure(backbone_graph, terminals)

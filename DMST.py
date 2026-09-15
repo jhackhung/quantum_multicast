@@ -58,7 +58,7 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
             dist, path = shortest_paths_from(r)
             reachable = sorted(
                 ((dist[x], x) for x in X if x in dist),
-                key=lambda t: (t[0], t[1]),
+                key=lambda t: (t[0], str(t[1])),
             )
             chosen = reachable[:k]
             edges, covered = set(), set()

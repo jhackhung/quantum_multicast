@@ -189,6 +189,68 @@ def assign_roles(
     B = nodes - D
     return QuantumNetwork(graph=graph, B=B, D=D, s=s)
 
+def attach_external_destinations(
+    graph: nx.DiGraph,
+    num_destinations: int,
+    rng: random.Random,
+    weight: float = 1e-6,
+    hosts: list | None = None,
+    allow_repeat_hosts: bool = True,
+) -> set:
+    """在既有（全為 B）的圖上，外掛 num_destinations 個 pendant destination 節點。
+    每個新節點透過近乎零成本的單向邊 host -> d 掛在既有節點上，代表同一實體位置同時具備 LQDC 轉發能力（host 本身仍是 B）與作為 destination 的功能（d 只接收、不轉發）。
+
+    Returns: 新增的 destination 節點 id 集合（D）。
+    """
+    existing_nodes = sorted(graph.nodes(), key=str)
+    if not existing_nodes:
+        raise ValueError("graph has no existing nodes to attach destinations to")
+
+    if hosts is None:
+        if allow_repeat_hosts:
+            hosts = [rng.choice(existing_nodes) for _ in range(num_destinations)]
+        else:
+            if num_destinations > len(existing_nodes):
+                raise ValueError(
+                    f"num_destinations ({num_destinations}) exceeds number of "
+                    f"candidate hosts ({len(existing_nodes)}) with allow_repeat_hosts=False"
+                )
+            hosts = rng.sample(existing_nodes, num_destinations)
+    elif len(hosts) != num_destinations:
+        raise ValueError("len(hosts) must equal num_destinations")
+
+    D = set()
+    for i, host in enumerate(hosts):
+        d_id = f"d_ext_{host}_{i}"
+        graph.add_node(d_id, host=host, is_external_destination=True)
+        graph.add_edge(host, d_id, weight=weight)   # 只加單向邊，d 不能轉發
+        D.add(d_id)
+    return D
+
+
+def assign_roles_external(
+    graph: nx.DiGraph,
+    num_destinations: int,
+    rng: random.Random,
+    attach_weight: float = 1e-6,
+    allow_repeat_hosts: bool = True,
+) -> QuantumNetwork:
+    """外掛版角色指派：所有原始節點皆為 B，destination 全為外掛 pendant 節點。
+
+    跟 assign_roles 的關鍵差異：|B| 就是圖原本的節點數，不受 num_destinations
+    影響；|V| = |B| + num_destinations。s 從原始節點（B）中挑選。
+    """
+    B = set(graph.nodes())
+    s = rng.choice(sorted(B, key=str))
+    D = attach_external_destinations(
+        graph,
+        num_destinations,
+        rng,
+        weight=attach_weight,
+        allow_repeat_hosts=allow_repeat_hosts,
+    )
+    return QuantumNetwork(graph=graph, B=B, D=D, s=s)
+
 def _parse_topology_zoo_gml(path: str):
     """Minimal, tolerant GML parser for Topology Zoo files.
  
@@ -413,6 +475,18 @@ def build_network(config: dict) -> QuantumNetwork:
     """Build a QuantumNetwork (graph + B/D/s roles) from a config dict, as
     loaded from a JSON file under config/. See the module docstring for the
     expected schema.
+
+    新增的 config key（皆為可選）：
+      - "destination_mode": "spt_leaf" 或 "external"，決定 D 怎麼指派。
+        "spt_leaf" 從 s 的最短路徑樹葉節點裡貪婪挑選既有節點當 D；
+        "external" 則把所有原始節點留作 B，另外外掛 pendant destination。
+        real 模式預設 "spt_leaf"，synthetic 模式預設 "external"。
+      - "attach_weight": external 模式下，每個 host -> d 邊的權重，
+        預設 1e-6。
+      - "allow_repeat_hosts": external 模式下，是否允許多個 destination
+        掛在同一個 host 上，預設 True。
+    "custom" 模式的網路角色（B/D/s）直接來自 GML 檔的節點標籤，
+    destination_mode 對它沒有作用。
     """
     mode = config["mode"]
     seed = config.get("seed", 0)
@@ -432,6 +506,7 @@ def build_network(config: dict) -> QuantumNetwork:
             rng=random.Random(seed),
         )
         network_name = config.get("name", "") or G.graph.get("name", "real")
+        destination_mode = config.get("destination_mode", "spt_leaf")
     elif mode == "synthetic":
         G = generate_synthetic_network(
             num_nodes=config.get("num_nodes", 500),
@@ -443,14 +518,30 @@ def build_network(config: dict) -> QuantumNetwork:
             seed=seed,
         )
         network_name = config.get("name", "") or G.graph["name"]
+        destination_mode = config.get("destination_mode", "external")
     else:
         raise ValueError(f"Unknown mode '{mode}' (expected 'real' or 'synthetic')")
- 
-    qn = assign_roles(
-        G,
-        num_destinations=config["num_dests"],
-        rng=random.Random(role_seed),
-    )
+
+    if destination_mode == "spt_leaf":
+        qn = assign_roles(
+            G,
+            num_destinations=config["num_dests"],
+            rng=random.Random(role_seed),
+        )
+    elif destination_mode == "external":
+        qn = assign_roles_external(
+            G,
+            num_destinations=config["num_dests"],
+            rng=random.Random(role_seed),
+            attach_weight=config.get("attach_weight", 1e-6),
+            allow_repeat_hosts=config.get("allow_repeat_hosts", False),
+        )
+    else:
+        raise ValueError(
+            f"Unknown destination_mode '{destination_mode}' "
+            f"(expected 'spt_leaf' or 'external')"
+        )
+
     qn.name = network_name
     qn.meta = {"config": config}
     qn.validate_roles()
