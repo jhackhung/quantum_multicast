@@ -24,13 +24,14 @@ set -euo pipefail
 #   SWEEP_ALPHAS : alpha sweep 要掃的 alpha 清單
 #   FIXED_ALPHA  : 跑 dests / qc sweep 時固定使用的單一 alpha
 # ---------------------------------------------------------
-SWEEP_ALPHAS_TATA="2, 3, 4, 5, 6, 7, 8, 9, 10"
-SWEEP_ALPHAS_ITCD="5, 6, 7, 8, 9, 10"
-SWEEP_ALPHAS_SYNTHETIC="5, 6, 7, 8, 9, 10"
+SWEEP_ALPHAS_TATA="1, 2, 4, 5, 6, 7, 8, 9, 10"
+SWEEP_ALPHAS_ITCD="1, 2, 4, 5, 6, 7, 8, 9, 10"
+# SWEEP_ALPHAS_SYNTHETIC="1, 2, 4, 5, 6, 7, 8, 9, 10"
+SWEEP_ALPHAS_SYNTHETIC="10, 15, 20, 25, 30, 35"
 
 FIXED_ALPHA_TATA="3"
 FIXED_ALPHA_ITCD="3"
-FIXED_ALPHA_SYNTHETIC="3"
+FIXED_ALPHA_SYNTHETIC="25"
 
 # ---------------------------------------------------------
 # 每個 target 對應的 config
@@ -150,20 +151,24 @@ run_qc() {
 
     BASE=$(cfg_get "$CONFIG" base_qc "cfg.get('num_nodes', 150)")
     STEP=$(cfg_get "$CONFIG" step_qc 50)
+    BASE_AREA=$(cfg_get "$CONFIG" area_size "cfg.get('area_size', 20.0)")
 
     echo ""
     echo "######################################################################"
     echo "# [$LABEL] qc (num_nodes) sweep | config=$CONFIG | alpha=$ALPHA"
-    echo "# base=$BASE step=$STEP points=$N algos=$ALGO"
+    echo "# base=$BASE step=$STEP points=$N algos=$ALGO base_area=$BASE_AREA"
     echo "######################################################################"
 
     for ((i = 1; i <= N; i++)); do
         NNODES=$((BASE + STEP * (i - 1)))
+        # AREA_SIZE=$(python3 -c "print($BASE_AREA * $NNODES / $BASE)")
+        AREA_SIZE=$(python3 -c "print($BASE_AREA)")
+
         TMP_CONFIG="$TMP_DIR/${LABEL}_qc_${NNODES}.json"
-        write_config "$CONFIG" "$TMP_CONFIG" "$ALPHA" "num_nodes=$NNODES"
+        write_config "$CONFIG" "$TMP_CONFIG" "$ALPHA" "num_nodes=$NNODES" "area_size=$AREA_SIZE"
 
         echo ""
-        echo "=== [$LABEL] qc | 第 $i/$N 次 | num_nodes=$NNODES alpha=$ALPHA ==="
+        echo "=== [$LABEL] qc | 第 $i/$N 次 | num_nodes=$NNODES area_size=$AREA_SIZE alpha=$ALPHA ==="
         python3 main.py "$TMP_CONFIG" qc "$ALGO"
     done
 }

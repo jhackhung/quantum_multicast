@@ -222,7 +222,13 @@ def attach_external_destinations(
     D = set()
     for i, host in enumerate(hosts):
         d_id = f"d_ext_{host}_{i}"
-        graph.add_node(d_id, host=host, is_external_destination=True)
+        host_attrs = graph.nodes[host]
+        coords = {
+            k: host_attrs[k]
+            for k in ("lat", "lon", "x", "y")
+            if k in host_attrs
+        }
+        graph.add_node(d_id, host=host, is_external_destination=True, **coords)
         graph.add_edge(host, d_id, weight=weight)   # 只加單向邊，d 不能轉發
         D.add(d_id)
     return D
@@ -397,9 +403,10 @@ def generate_synthetic_network(
           distance among all nodes (paper reference: alpha=0.4, beta=10, i.e.
           "0.4 * e^(-10 d / L)"; default alpha lowered to 0.15 here to make
           the generated graph sparser).
-        - edge weight is a random value in [0, 1) drawn independently per
-          direction (u->v and v->u get different weights), not derived from
-          distance/delay. delay_min_ms/delay_max_ms are accepted for
+        - edge weight is the raw Euclidean distance (no min-max
+          normalization) multiplied by an independent noise factor per
+          direction, so u->v and v->u differ while sharing the same
+          distance baseline. delay_min_ms/delay_max_ms are accepted for
           call-site compatibility but unused.
     """
     rng = random.Random(seed)
@@ -445,21 +452,13 @@ def generate_synthetic_network(
             main_component = main_component | comp
             
     all_dists = {**pair_dists, **bridge_dists}
-    dist_values = list(all_dists.values())
-    d_min = min(dist_values)
-    d_max = max(dist_values)
-    d_range = (d_max - d_min) or 1.0
-    
-    NOISE_AMP = 0.3
+
+    ASYM_LOW, ASYM_HIGH = 0.7, 1.3
     EPSILON = 1e-6
-    
+
     def _synthetic_direction_weight(d: float) -> float:
-        base = (d - d_min) / d_range
-        noise = rng.uniform(-NOISE_AMP, NOISE_AMP)
-        raw = base + noise
-        rescaled = (raw + NOISE_AMP) / (1 + 2 * NOISE_AMP)
-        return max(min(rescaled, 1.0), EPSILON)
-    
+        return max(d * rng.uniform(ASYM_LOW, ASYM_HIGH), EPSILON)
+
     G = nx.DiGraph()
     for i in range(num_nodes):
         G.add_node(i, x=positions[i][0], y=positions[i][1])
@@ -480,7 +479,7 @@ def build_network(config: dict) -> QuantumNetwork:
       - "destination_mode": "spt_leaf" 或 "external"，決定 D 怎麼指派。
         "spt_leaf" 從 s 的最短路徑樹葉節點裡貪婪挑選既有節點當 D；
         "external" 則把所有原始節點留作 B，另外外掛 pendant destination。
-        real 模式預設 "spt_leaf"，synthetic 模式預設 "external"。
+        real / synthetic 模式皆預設 "external"。
       - "attach_weight": external 模式下，每個 host -> d 邊的權重，
         預設 1e-6。
       - "allow_repeat_hosts": external 模式下，是否允許多個 destination
@@ -506,7 +505,7 @@ def build_network(config: dict) -> QuantumNetwork:
             rng=random.Random(seed),
         )
         network_name = config.get("name", "") or G.graph.get("name", "real")
-        destination_mode = config.get("destination_mode", "spt_leaf")
+        destination_mode = config.get("destination_mode", "external")
     elif mode == "synthetic":
         G = generate_synthetic_network(
             num_nodes=config.get("num_nodes", 500),
