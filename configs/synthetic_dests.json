@@ -8,10 +8,10 @@
   "waxman_alpha": 0.15,
   "waxman_beta": 10.0,
   "num_dests": 20,
-  "alpha": 2,
-  "seed": 0,
+  "pdqta_level": 2,
+  "alpha": 3,
+  "seed": 1,
   "role_seed": 1,
-  "output_name": "synthetic_150_d20_qc180",
   "step_dests": 5,
   "num_runs": 100,
   "_comment": "can set \"num_qc\": 120, to specify the number of quantum computers"

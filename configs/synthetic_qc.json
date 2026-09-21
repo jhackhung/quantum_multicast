@@ -1,0 +1,18 @@
+{
+  "mode": "synthetic",
+  "name": "synthetic",
+  "num_nodes": 30,
+  "delay_min_ms": 10.0,
+  "delay_max_ms": 100.0,
+  "area_size": 20.0,
+  "waxman_alpha": 0.15,
+  "waxman_beta": 10.0,
+  "num_dests": 30,
+  "pdqta_level": 2,
+  "alpha": 3,
+  "seed": 1,
+  "role_seed": 1,
+  "step_qc": 30,
+  "num_runs": 100,
+  "_comment": "num_nodes 為 |B| 設定。ref_length 讓連線機率改用絕對距離（P = a*exp(-b*d/ref_length)），預設的 L=最大成對距離會讓 area_size 被約分掉而完全失效。此處 area_size 固定不放大，代表「同一區域內塞進更多量子電腦」，密度隨 |B| 上升。若要改為密度固定，加上 density_ref_nodes: 30（見 configs/synthetic_qc_fixed_density.json）"
+}
