@@ -106,10 +106,13 @@ print(cfg.get('step_qc', 50))
         TMP_CONFIG=$(mktemp /tmp/config_qc.XXXXXX.json)
 
         python3 -c "
-import json, sys
+import json, math, sys
 cfg = json.load(open('$CONFIG'))
 cfg['num_nodes'] = $NNODES
 cfg['algos'] = '$ALGO'
+if cfg.get('scale_area_with_qc', False):
+    base_area = cfg.get('area_size', 20.0)
+    cfg['area_size'] = base_area * math.sqrt($NNODES / $BASE_NNODES)
 json.dump(cfg, open('$TMP_CONFIG', 'w'), indent=2, ensure_ascii=False)
 "
 

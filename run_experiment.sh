@@ -26,12 +26,12 @@ set -euo pipefail
 # ---------------------------------------------------------
 SWEEP_ALPHAS_TATA="1, 2, 4, 5, 6, 7, 8, 9, 10"
 SWEEP_ALPHAS_ITCD="1, 2, 4, 5, 6, 7, 8, 9, 10"
-# SWEEP_ALPHAS_SYNTHETIC="1, 2, 4, 5, 6, 7, 8, 9, 10"
-SWEEP_ALPHAS_SYNTHETIC="10, 15, 20, 25, 30, 35"
+SWEEP_ALPHAS_SYNTHETIC="1, 2, 4, 5, 6, 7, 8, 9, 10"
+# SWEEP_ALPHAS_SYNTHETIC="10, 15, 20, 25, 30, 35"
 
 FIXED_ALPHA_TATA="3"
 FIXED_ALPHA_ITCD="3"
-FIXED_ALPHA_SYNTHETIC="25"
+FIXED_ALPHA_SYNTHETIC="3"
 
 # ---------------------------------------------------------
 # 每個 target 對應的 config
@@ -161,8 +161,8 @@ run_qc() {
 
     for ((i = 1; i <= N; i++)); do
         NNODES=$((BASE + STEP * (i - 1)))
-        # AREA_SIZE=$(python3 -c "print($BASE_AREA * $NNODES / $BASE)")
-        AREA_SIZE=$(python3 -c "print($BASE_AREA)")
+        AREA_SIZE=$(python3 -c "print($BASE_AREA * $NNODES / $BASE)")
+        # AREA_SIZE=$(python3 -c "print($BASE_AREA)")
 
         TMP_CONFIG="$TMP_DIR/${LABEL}_qc_${NNODES}.json"
         write_config "$CONFIG" "$TMP_CONFIG" "$ALPHA" "num_nodes=$NNODES" "area_size=$AREA_SIZE"

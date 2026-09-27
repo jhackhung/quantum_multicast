@@ -21,7 +21,7 @@ import QSTA
 import Debug
 
 CHECKPOINT_DIR = "checkpoints"
-EXPERIMENT_DIR = "experiment/distance_weighted_SPT_branch"
+EXPERIMENT_DIR = "experiment/"
 
 STD_METRIC_KEYS = [
     "transmission_cost",
@@ -47,7 +47,7 @@ def build_spt_tree(qn: QuantumNetwork) -> set[tuple]:
             candidates = pred.get(v)
             if not candidates:
                 raise ValueError(f"destination {d} unreachable from source {qn.s} without routing through another destination")
-            u = min(candidates)  # deterministic tie-break
+            u = min(candidates, key=str)  # deterministic tie-break
             tree_edges.add((u, v))
             v = u
 
@@ -63,11 +63,11 @@ ALGO_REGISTRY = {
 }
 
 DEFAULT_PLACEMENT_MODE: Dict[str, str] = {
-    "spt": "branch",
-    "clea": "branch",
-    "dmst": "branch",
-    "kmb": "branch",
-    "mfcs": "branch",
+    "spt": "passive",
+    "clea": "passive",
+    "dmst": "passive",
+    "kmb": "passive",
+    "mfcs": "passive",
 }
 
 def parse_algos(spec: str | None) -> list[str]:

@@ -345,14 +345,14 @@ def load_real_network(
     d_max = max(dists.values()) if dists else 1.0
     d_range = (d_max - d_min) or 1.0
     
-    ASYM_LOW, ASYM_HIGH = 0.7, 1.3
+    ASYM_LOW, ASYM_HIGH = -0.05, 0.05
     EPSILON = 1e-6
 
     def _direction_weight(u, v) -> float:
         if (u, v) in dists:
             base = (dists[(u, v)] - d_min) / d_range # normalized distance in [0, 1]
             asymmetry = rng.uniform(ASYM_LOW, ASYM_HIGH)
-            raw = (base * asymmetry) / ASYM_HIGH
+            raw = (base + asymmetry)
             return max(raw, EPSILON) # avoid zero-weight edges
         return rng.random()
 
@@ -403,8 +403,11 @@ def generate_synthetic_network(
           distance among all nodes (paper reference: alpha=0.4, beta=10, i.e.
           "0.4 * e^(-10 d / L)"; default alpha lowered to 0.15 here to make
           the generated graph sparser).
-        - edge weight is the raw Euclidean distance (no min-max
-          normalization) multiplied by an independent noise factor per
+        - edge weight is the Euclidean distance divided by a fixed
+          reference scale (not area_size, and not min-max normalized),
+          so relative distance stays comparable across an area_size
+          sweep (e.g. |B| sweeps that grow area_size to hold node
+          density constant), plus an independent noise term per
           direction, so u->v and v->u differ while sharing the same
           distance baseline. delay_min_ms/delay_max_ms are accepted for
           call-site compatibility but unused.
@@ -453,11 +456,14 @@ def generate_synthetic_network(
             
     all_dists = {**pair_dists, **bridge_dists}
 
-    ASYM_LOW, ASYM_HIGH = 0.7, 1.3
+    ASYM_LOW, ASYM_HIGH = -0.05, 0.05
     EPSILON = 1e-6
+    
+    REFERENCE_SCALE = 20.0 # fixed scale
 
     def _synthetic_direction_weight(d: float) -> float:
-        return max(d * rng.uniform(ASYM_LOW, ASYM_HIGH), EPSILON)
+        base = d / REFERENCE_SCALE
+        return max(base + rng.uniform(ASYM_LOW, ASYM_HIGH), EPSILON)
 
     G = nx.DiGraph()
     for i in range(num_nodes):

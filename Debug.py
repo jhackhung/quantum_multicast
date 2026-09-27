@@ -15,6 +15,7 @@ import argparse
 import matplotlib
 import matplotlib.pyplot as plt
 import networkx as nx
+matplotlib.use("Agg")  # avoid initializing a GUI backend when running headless
 
 from Graph import QuantumNetwork
 
@@ -103,6 +104,66 @@ def visualize_tree(
     nx.draw_networkx_nodes(G, pos, nodelist=list(other), node_color="lightgray", node_size=40)
     nx.draw_networkx_nodes(G, pos, nodelist=list(b_only), node_color="orange", node_size=80, label="B (quantum computers)")
     nx.draw_networkx_nodes(G, pos, nodelist=list(d_only), node_color="royalblue", node_shape="s", node_size=80, label="D (destinations)")
+    if qn.s is not None:
+        nx.draw_networkx_nodes(G, pos, nodelist=[qn.s], node_color="red", node_shape="*", node_size=300, label="s (source)")
+
+    labels = {n: G.nodes[n].get("label", n) for n in qn.B | qn.D}
+    nx.draw_networkx_labels(G, pos, labels=labels, font_size=7)
+
+    plt.title(output_name or qn.summary())
+    plt.legend(scatterpoints=1, loc="best")
+    plt.axis("off")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        print(f"Saved figure to {save_path}")
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+
+def visualize_lqdc_tree(
+    qn: QuantumNetwork,
+    tree_edges: set[tuple],
+    b: dict,
+    output_name: str | None = None,
+    save_path: str | None = None,
+    show: bool = True,
+    figsize: tuple[float, float] = (12, 10),
+) -> None:
+    """Draw a multicast tree with LQDC placement overlaid on top of visualize_tree's roles:
+        - s (source): red star
+        - B \\ {s} (quantum computers), LQDC activated (b[v] == 1): purple triangles
+        - B \\ {s} (quantum computers), not activated: orange circles
+        - D (destinations): blue squares
+        - everything else: light gray dots
+        - tree_edges: highlighted in solid black over the faint full graph
+
+    b: node -> {0, 1} mapping from evaluate.evaluate_tree_full(...).b, marking
+    which quantum computers have LQDC enabled on this tree.
+    """
+    G = qn.graph
+    pos = _infer_positions(G)
+
+    other = set(G.nodes()) - qn.B - qn.D
+    d_only = qn.D - {qn.s}
+    b_only = qn.B - {qn.s}
+    lqdc_on = {v for v in b_only if b.get(v)}
+    lqdc_off = b_only - lqdc_on
+
+    plt.figure(figsize=figsize)
+
+    nx.draw_networkx_edges(G, pos, alpha=0.1, arrows=False, width=0.5)
+    nx.draw_networkx_edges(
+        G, pos, edgelist=list(tree_edges), edge_color="black", arrows=True,
+        arrowsize=10, width=1.5,
+    )
+    nx.draw_networkx_nodes(G, pos, nodelist=list(other), node_color="lightgray", node_size=40)
+    nx.draw_networkx_nodes(G, pos, nodelist=list(d_only), node_color="royalblue", node_shape="s", node_size=80, label="D (destinations)")
+    nx.draw_networkx_nodes(G, pos, nodelist=list(lqdc_off), node_color="orange", node_size=80, label="B, LQDC off")
+    nx.draw_networkx_nodes(G, pos, nodelist=list(lqdc_on), node_color="purple", node_shape="^", node_size=140, label="B, LQDC on")
     if qn.s is not None:
         nx.draw_networkx_nodes(G, pos, nodelist=[qn.s], node_color="red", node_shape="*", node_size=300, label="s (source)")
 
