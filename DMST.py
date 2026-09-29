@@ -14,16 +14,21 @@ def _collapse_to_tree(graph: nx.DiGraph, root, tree_edges: set) -> set[tuple]:
     arb = nx.minimum_spanning_arborescence(G_S, attr="weight")
     return set(arb.edges())
 
-def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
+def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> tuple[set[tuple], set]:
     """通用遞迴版本：B_i(k, r, X)
     i=1 時退化為「連到 k 個最近終端」(概念上接近 SPT)。
     i=2 時即為 DMST baseline 使用的 two-layer 變體。
     i 越大理論近似比越好 (O(k^{1/i}))，但執行時間也隨之增加 (O(k * n^i))。
+
+    回傳 (tree_edges, recursion_points)：recursion_points 是遞迴過程中
+    A() 選中作為下一層 bunch 根的節點集合，即 DMST 演算法本身「遞迴找點接」
+    的天然壓縮候選點，供 evaluate.py 的 LQDC 壓縮點決策使用。
     """
     graph = qn.graph
     root = qn.s
     terminals = qn.D
     qc_nodes = set(qn.B)
+    recursion_points: set = set()
 
     interior_graph = graph.copy()
     interior_graph.remove_nodes_from(terminals)
@@ -102,6 +107,7 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
             return set(), set()
 
         _, v, sub_edges, covered = best
+        recursion_points.add(v)
         edges = _collapse_to_tree(graph, r, path_edges(path_r[v]) | sub_edges)
         return edges, covered
 
@@ -109,9 +115,9 @@ def build_dst_tree(qn: QuantumNetwork, i: int = 2) -> set[tuple]:
     if covered != set(terminals):
         missing = set(terminals) - covered
         raise ValueError(f"could not connect all destinations; missing {missing}")
-    return edges
+    return edges, recursion_points
 
 
-def build_dmst_tree(qn: QuantumNetwork) -> set[tuple]:
+def build_dmst_tree(qn: QuantumNetwork) -> tuple[set[tuple], set]:
     """DMST baseline = two-layer 變體，即 B_2(k, r, X)。"""
     return build_dst_tree(qn, i=2)

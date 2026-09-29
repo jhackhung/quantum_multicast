@@ -2,15 +2,20 @@ import networkx as nx
 from Graph import QuantumNetwork
 
 
-def build_kmb_tree(qn: QuantumNetwork) -> set[tuple]:
-    """KMB baseline """
+def build_kmb_tree(qn: QuantumNetwork) -> tuple[set[tuple], set]:
+    """KMB baseline
+
+    回傳 (tree_edges, proxy_points)：proxy_points 是每個 leaf destination
+    代理匯聚到的 B 節點 (proxy_of.values())，即 KMB 演算法本身「代理匯聚」
+    的天然壓縮候選點，供 evaluate.py 的 LQDC 壓縮點決策使用。
+    """
     graph = qn.graph
     root = qn.s
     D = set(qn.D)
     B = set(qn.B)
 
     if not D:
-        return set()
+        return set(), set()
 
     # undirected for MST
     if graph.is_directed():
@@ -130,4 +135,4 @@ def build_kmb_tree(qn: QuantumNetwork) -> set[tuple]:
             f"forwarding nodes despite the leaf-only construction"
         )
  
-    return directed_edges
+    return directed_edges, set(proxy_of.values())

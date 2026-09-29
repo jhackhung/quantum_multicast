@@ -62,12 +62,13 @@ ALGO_REGISTRY = {
     "qsta": None
 }
 
+ALGOS_WITH_CANDIDATE_NODES = {"dmst", "kmb", "mfcs"}
 DEFAULT_PLACEMENT_MODE: Dict[str, str] = {
-    "spt": "passive",
-    "clea": "passive",
-    "dmst": "passive",
-    "kmb": "passive",
-    "mfcs": "passive",
+    "spt": "none",
+    "clea": "branch",
+    "dmst": "custom",
+    "kmb": "custom",
+    "mfcs": "custom",
 }
 
 def parse_algos(spec: str | None) -> list[str]:
@@ -222,8 +223,11 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
             print(f"\n--- Building {algo_name.upper()} tree for {qn.name} (run {run_idx})... ---")
             start_time = time.time()
 
+            algo_candidate_nodes = None
             if algo_name == "qsta":
                 tree_edges, metrics, b = QSTA.build_and_evaluate_qsta(qn, alpha=alpha, k=k)
+            elif algo_name in ALGOS_WITH_CANDIDATE_NODES:
+                tree_edges, algo_candidate_nodes = ALGO_REGISTRY[algo_name](qn)
             else:
                 tree_edges = ALGO_REGISTRY[algo_name](qn)
 
@@ -240,7 +244,10 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
             if algo_name != "qsta":
                 placement_mode = DEFAULT_PLACEMENT_MODE.get(algo_name, "branch")
                 try:
-                    metrics, b = evaluate.evaluate_tree(qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k)
+                    metrics, b = evaluate.evaluate_tree(
+                        qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k,
+                        algo_candidate_nodes=algo_candidate_nodes,
+                    )
                 except ValueError as e:
                     print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
                     mark_attempted(attempted, run_key, algo_name, ckpt_path, state)

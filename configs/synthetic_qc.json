@@ -5,6 +5,7 @@
   "delay_min_ms": 10.0,
   "delay_max_ms": 100.0,
   "area_size": 20.0,
+  "scale_area_with_qc": true,
   "waxman_alpha": 0.15,
   "waxman_beta": 10.0,
   "num_dests": 30,
