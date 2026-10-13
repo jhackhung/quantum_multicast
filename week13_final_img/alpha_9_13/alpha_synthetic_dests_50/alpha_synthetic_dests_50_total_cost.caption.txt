@@ -1,0 +1,1 @@
+The y-axis is truncated at 160 to clearly display the trend of the lower-cost algorithms. CLEA increases up to 896 at alpha=15. DMST increases up to 192 at alpha=15. KMB increases up to 795 at alpha=15. MFCS increases up to 562 at alpha=15.
