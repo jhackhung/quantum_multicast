@@ -4,7 +4,7 @@
   "name": "ITCD",
   "delay_min_ms": 10.0,
   "delay_max_ms": 100.0,
-  "num_dests": 20,
+  "num_dests": 30,
   "pdqta_level": 2,
   "alpha": 3, 
   "seed": 1,

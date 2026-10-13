@@ -33,6 +33,13 @@ STD_METRIC_KEYS = [
     "no_lqdc_total_cost",
 ]
 
+MEAN_ONLY_KEYS = [
+    "num_activated_nodes",
+    "lqdc_cost_savings",
+    "lqdc_cost_savings_ratio",
+    "build_time_sec",
+]
+
 def build_spt_tree(qn: QuantumNetwork) -> set[tuple]:
     """每個 destination 各自沿最短路徑接到 source，但路徑必須避開其他
     destination（destination 不能轉發），故對每個 d 各自在排除
@@ -109,9 +116,10 @@ def upsert_results(results: list[dict], path: str) -> None:
         writer.writeheader()
         writer.writerows(merged)
 
-def checkpoint_path(sweep_x: str, graph_name: str, alpha, num_nodes: int, num_dests: int, k: int) -> str:
+def checkpoint_path(sweep_x, graph_name, alpha, num_nodes, num_dests, k, area="na", tag="v2") -> str:
     return os.path.join(
-        CHECKPOINT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_n{num_nodes}_d{num_dests}_k_{k}.json"
+        CHECKPOINT_DIR,
+        f"{sweep_x}_{graph_name}_alpha_{alpha}_n{num_nodes}_d{num_dests}_a{area}_k_{k}_{tag}.json",
     )
 
 def load_checkpoint(path: str) -> dict:
@@ -145,6 +153,11 @@ def aggregate_runs(all_results: list[dict]) -> list[dict]:
             values = [r[key] for r in rows if key in r]
             base[key] = statistics.mean(values)
             base[f"{key}_std"] = statistics.stdev(values) if len(values) > 1 else 0.0
+        
+        for key in MEAN_ONLY_KEYS:
+            values = [r[key] for r in rows if key in r]
+            if values:
+                base[key] = statistics.mean(values)
 
         aggregated.append(base)
 
@@ -193,7 +206,8 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
     graph_name = cfg.get("name", "result")
     num_nodes = cfg.get("num_nodes", 100)
     num_dests = cfg.get("num_dests", 0)
-    ckpt_path = checkpoint_path(sweep_x, graph_name, alpha, num_nodes, num_dests, k)
+    ckpt_path = checkpoint_path(sweep_x, graph_name, alpha, num_nodes, num_dests, k,
+                                area=cfg.get("area_size", "na"), tag=cfg.get("version_tag", "v2"))
     state = load_checkpoint(ckpt_path)
     runs = state["runs"]  # {str(run_idx): [result_row, ...]}
 
@@ -209,6 +223,7 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
 
         variant_cfg = dict(cfg)
         variant_cfg["seed"] = base_seed + run_idx
+        variant_cfg["role_seed"] = cfg.get("role_seed", 1) + run_idx
 
         print("\n" + "=" * 70)
         print(f"Run {run_idx + 1}/{num_runs}, seed={variant_cfg['seed']}")
@@ -292,7 +307,11 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
     aggregated = aggregate_runs(all_results)
 
     os.makedirs(EXPERIMENT_DIR, exist_ok=True)
-    output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_k_{k}.csv")
+    if (sweep_x == "qc"):
+        output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_k_{k}_d{len(qn.D)}.csv")
+    else:    
+        output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_k_{k}.csv")
+    
     upsert_results(aggregated, output_path)
     print(f"\nAggregated {len(all_results)} raw rows across {len(runs)} run(s) -> {len(aggregated)} rows in {output_path}")
 

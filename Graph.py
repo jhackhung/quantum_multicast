@@ -399,10 +399,15 @@ def generate_synthetic_network(
           area_size x area_size square (default 20 x 20).
         - edge (u, v) exists with probability
               P(u, v) = waxman_alpha * exp(-waxman_beta * d(u,v) / L)
-          where d(u, v) is Euclidean distance and L is the maximum pairwise
-          distance among all nodes (paper reference: alpha=0.4, beta=10, i.e.
-          "0.4 * e^(-10 d / L)"; default alpha lowered to 0.15 here to make
-          the generated graph sparser).
+          where d(u, v) is Euclidean distance and L = area_size * sqrt(2)
+          (the square's diagonal), a fixed reference scale rather than the
+          max pairwise distance actually sampled -- this keeps the d/L
+          distribution (and therefore density) independent of num_nodes, so
+          that scaling area_size with |B| (see run.sh's scale_area_with_qc)
+          actually holds density constant instead of being cancelled out
+          (paper reference: alpha=0.4, beta=10, i.e. "0.4 * e^(-10 d / L)";
+          default alpha lowered to 0.15 here to make the generated graph
+          sparser).
         - edge weight is the Euclidean distance divided by a fixed
           reference scale (not area_size, and not min-max normalized),
           so relative distance stays comparable across an area_size
@@ -419,10 +424,12 @@ def generate_synthetic_network(
         (x1, y1), (x2, y2) = positions[u], positions[v]
         return math.hypot(x1 - x2, y1 - y2)
  
-    L = max(
-        (dist(u, v) for u in range(num_nodes) for v in range(u + 1, num_nodes)),
-        default=1.0,
-    ) or 1.0
+    L = 20.0 * math.sqrt(2) # 固定參考尺度，不隨 area_size 變
+    
+    # L = max(
+    #     (dist(u, v) for u in range(num_nodes) for v in range(u + 1, num_nodes)),
+    #     default=1.0,
+    # ) or 1.0
  
     pair_dists = {}
     for u in range(num_nodes):

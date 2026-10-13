@@ -27,11 +27,16 @@ set -euo pipefail
 SWEEP_ALPHAS_TATA="1, 2, 4, 5, 6, 7, 8, 9, 10"
 SWEEP_ALPHAS_ITCD="1, 2, 4, 5, 6, 7, 8, 9, 10"
 SWEEP_ALPHAS_SYNTHETIC="1, 2, 4, 5, 6, 7, 8, 9, 10"
-# SWEEP_ALPHAS_SYNTHETIC="10, 15, 20, 25, 30, 35"
+# SWEEP_ALPHAS_TATA="11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
+# SWEEP_ALPHAS_ITCD="11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
+# SWEEP_ALPHAS_SYNTHETIC="11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
 
 FIXED_ALPHA_TATA="3"
 FIXED_ALPHA_ITCD="3"
 FIXED_ALPHA_SYNTHETIC="3"
+
+DEST_SWEEP_START=20
+DEST_SWEEP_STEP=5
 
 # ---------------------------------------------------------
 # 每個 target 對應的 config
@@ -121,8 +126,8 @@ run_dests() {
     local LABEL=$1 CONFIG=$2 ALPHA=$3
     local BASE STEP NDESTS TMP_CONFIG
 
-    BASE=$(cfg_get "$CONFIG" num_dests 30)
-    STEP=$(cfg_get "$CONFIG" step_dests 5)
+    BASE=$DEST_SWEEP_START
+    STEP=$DEST_SWEEP_STEP
 
     echo ""
     echo "######################################################################"
@@ -147,7 +152,7 @@ run_dests() {
 # =========================================================
 run_qc() {
     local LABEL=$1 CONFIG=$2 ALPHA=$3
-    local BASE STEP NNODES TMP_CONFIG
+    local BASE STEP NNODES TMP_CONFIG BASE_AREA AREA_SIZE
 
     BASE=$(cfg_get "$CONFIG" base_qc "cfg.get('num_nodes', 150)")
     STEP=$(cfg_get "$CONFIG" step_qc 50)
@@ -161,7 +166,7 @@ run_qc() {
 
     for ((i = 1; i <= N; i++)); do
         NNODES=$((BASE + STEP * (i - 1)))
-        AREA_SIZE=$(python3 -c "print($BASE_AREA * $NNODES / $BASE)")
+        AREA_SIZE=$(python3 -c "import math; print($BASE_AREA * math.sqrt($NNODES / $BASE))")
         # AREA_SIZE=$(python3 -c "print($BASE_AREA)")
 
         TMP_CONFIG="$TMP_DIR/${LABEL}_qc_${NNODES}.json"
@@ -213,6 +218,91 @@ run_target() {
         run_alpha "$LABEL" "$DESTS_CONFIG" "$SWEEP_ALPHAS"
     fi
 }
+
+# =========================================================
+# 實驗計畫預覽：在真正執行前列出所有要跑的實驗與參數
+# =========================================================
+plan_target() {
+    local LABEL=$1 DESTS_CONFIG=$2 QC_CONFIG=$3 FIXED_ALPHA=$4 SWEEP_ALPHAS=$5
+    local MODE TOPO K RUNS SEED NDESTS_CFG NNODES_CFG
+    local i v LIST
+
+    MODE=$(cfg_get "$DESTS_CONFIG" mode "'?'")
+    K=$(cfg_get "$DESTS_CONFIG" pdqta_level 2)
+    RUNS=$(cfg_get "$DESTS_CONFIG" num_runs 1)
+    SEED=$(cfg_get "$DESTS_CONFIG" seed 0)
+    NDESTS_CFG=$(cfg_get "$DESTS_CONFIG" num_dests 0)
+    if [ "$MODE" = "synthetic" ]; then
+        TOPO="synthetic (num_nodes=$(cfg_get "$DESTS_CONFIG" num_nodes 100), area_size=$(cfg_get "$DESTS_CONFIG" area_size 20.0))"
+    else
+        TOPO="real ($(cfg_get "$DESTS_CONFIG" gml_path "'?'"))"
+    fi
+
+    echo "[$LABEL] topology = $TOPO"
+    echo "        k(pdqta_level)=$K  num_runs=$RUNS  base_seed=$SEED  algos=$ALGO"
+
+    if has_sweep dests; then
+        LIST=""
+        for ((i = 0; i < N; i++)); do
+            LIST+="$((DEST_SWEEP_START + DEST_SWEEP_STEP * i)) "
+        done
+        echo "  - dests sweep : config=$DESTS_CONFIG"
+        echo "      num_dests  = ${LIST% } (start=$DEST_SWEEP_START, step=$DEST_SWEEP_STEP, $N 點)"
+        echo "      alpha(固定) = $FIXED_ALPHA"
+    fi
+
+    if has_sweep qc; then
+        if [ -n "$QC_CONFIG" ]; then
+            local BASE STEP AREA
+            BASE=$(cfg_get "$QC_CONFIG" base_qc "cfg.get('num_nodes', 150)")
+            STEP=$(cfg_get "$QC_CONFIG" step_qc 50)
+            AREA=$(cfg_get "$QC_CONFIG" area_size 20.0)
+            LIST=""
+            for ((i = 0; i < N; i++)); do
+                LIST+="$((BASE + STEP * i)) "
+            done
+            echo "  - qc sweep    : config=$QC_CONFIG"
+            echo "      num_nodes  = ${LIST% } (base=$BASE, step=$STEP, $N 點)"
+            echo "      num_dests  = $(cfg_get "$QC_CONFIG" num_dests 0) (固定), area_size=$AREA (固定)"
+            echo "      alpha(固定) = $FIXED_ALPHA"
+        else
+            echo "  - qc sweep    : 略過（僅 synthetic 支援）"
+        fi
+    fi
+
+    if has_sweep alpha; then
+        echo "  - alpha sweep : config=$DESTS_CONFIG"
+        echo "      alpha      = [$SWEEP_ALPHAS]"
+        echo "      num_dests  = $NDESTS_CFG (固定，取自 config)"
+    fi
+    echo ""
+}
+
+print_plan() {
+    echo "======================================================================"
+    echo "實驗計畫（TARGET=$TARGET  SWEEPS=$SWEEPS  ALGO=$ALGO  N=$N）"
+    echo "======================================================================"
+    if [ "$TARGET" = "tata" ] || [ "$TARGET" = "all" ]; then
+        plan_target TATA "$TATA_DESTS_CONFIG" "" "$FIXED_ALPHA_TATA" "$SWEEP_ALPHAS_TATA"
+    fi
+    if [ "$TARGET" = "itcd" ] || [ "$TARGET" = "all" ]; then
+        plan_target ITCD "$ITCD_DESTS_CONFIG" "" "$FIXED_ALPHA_ITCD" "$SWEEP_ALPHAS_ITCD"
+    fi
+    if [ "$TARGET" = "synthetic" ] || [ "$TARGET" = "all" ]; then
+        plan_target SYNTHETIC "$SYNTHETIC_DESTS_CONFIG" "$SYNTHETIC_QC_CONFIG"             "$FIXED_ALPHA_SYNTHETIC" "$SWEEP_ALPHAS_SYNTHETIC"
+    fi
+    echo "(已有 checkpoint 的 run 會自動 skip；設 YES=1 可略過確認)"
+    echo "======================================================================"
+}
+
+print_plan
+if [ -t 0 ] && [ "${YES:-0}" != "1" ]; then
+    read -r -p "確認開始執行？[Y/n] " REPLY
+    case "${REPLY:-Y}" in
+        [Yy]*) ;;
+        *) echo "已取消"; exit 0 ;;
+    esac
+fi
 
 echo "TARGET=$TARGET"
 echo "SWEEPS=$SWEEPS"

@@ -237,16 +237,14 @@ def tbqcm(W: QCNWeights, qn: QuantumNetwork, ttemp: QCNSubtree, alpha: float) ->
         return ({t.root} | {v for edge in t.links for v in edge}) & qn.B
     
     for u in sorted(qcs_in_tree(tree), key=str):
-        N_u = _children_map(tree.links).get(u, set())
-        if not N_u:
-            continue
         u_row = W.get(u, {})
 
         for t in sorted(qn.B - qcs_in_tree(tree), key=str):
+            N_u = _children_map(tree.links).get(u, set())
+            if not N_u or t not in u_row:
+                continue
             assert t not in N_u and t != u, "t must be outside the current tree"
             
-            if t not in u_row:
-                continue
             t_row = W.get(t, {})
 
             candidates = [v for v in N_u if v in t_row]

@@ -94,15 +94,19 @@ def load_dests_mode(excel_path: str) -> pd.DataFrame:
     return df
 
 
-def load_qc_mode(excel_path: str, start_node: int | None, end_node: int | None) -> pd.DataFrame:
+def load_qc_mode(excel_path: str) -> pd.DataFrame:
     df = pd.read_csv(excel_path)
     df["num_b"] = parse_num_b_from_graph(df)
-    if start_node is not None:
-        df = df[df["num_b"] >= start_node]
-    if end_node is not None:
-        df = df[df["num_b"] <= end_node]
+    return df
+
+
+def filter_x_range(df: pd.DataFrame, x_col: str, x_min: float | None, x_max: float | None) -> pd.DataFrame:
+    if x_min is not None:
+        df = df[df[x_col] >= x_min]
+    if x_max is not None:
+        df = df[df[x_col] <= x_max]
     if df.empty:
-        raise ValueError("No rows found in the given |B| range.")
+        raise ValueError(f"No rows found in the given {x_col} range.")
     return df
 
 
@@ -151,13 +155,19 @@ def _collect_algo_series(df: pd.DataFrame, metric: str, x_col: str) -> dict:
     return series, has_std
 
 
-def _draw_series(ax, df_algo: pd.DataFrame, algo: str, metric: str, x_col: str, has_std: bool) -> None:
+def _draw_series(ax, df_algo: pd.DataFrame, algo: str, metric: str, x_col: str, has_std: bool,
+                 floor_zero: bool = False) -> None:
     std_col = f"{metric}_std"
     if has_std and std_col in df_algo.columns:
+        yerr = df_algo[std_col]
+        if floor_zero:
+            # 下界 error bar 最多只延伸到 0，不會出現負值
+            lower = yerr.clip(upper=df_algo[metric].clip(lower=0))
+            yerr = [lower.values, yerr.values]
         ax.errorbar(
             df_algo[x_col],
             df_algo[metric],
-            yerr=df_algo[std_col],
+            yerr=yerr,
             label=algo,
             markersize=7,
             capsize=4,
@@ -226,8 +236,10 @@ def plot_metric(
     x_step: float | None = None,
     break_threshold: float | None = None,
     y_max: float | None = None,
+    y_min: float | None = None,
 ) -> None:
     series, has_std = _collect_algo_series(df, metric, x_col)
+    floor_zero = x_col == "alpha"  # alpha 圖：Y 軸從 0 開始，error bar 下界不低於 0
 
     # 只有在該 metric 這次繪圖裡真的出現超過 break_threshold 的值時，
     # 才切成上下兩個子圖；否則跟原本一樣畫單一子圖。
@@ -246,7 +258,7 @@ def plot_metric(
         fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
         for algo in ALGOS:
             if algo in series:
-                _draw_series(ax, series[algo], algo, metric, x_col, has_std)
+                _draw_series(ax, series[algo], algo, metric, x_col, has_std, floor_zero)
 
         ax.set_xlabel(x_label)
         ax.set_ylabel(METRICS[metric])
@@ -265,6 +277,10 @@ def plot_metric(
             )
         else:
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        if y_min is not None:
+            ax.set_ylim(bottom=y_min)
+        elif floor_zero:
+            ax.set_ylim(bottom=0)
 
         # y-max 模式下右上角會有 "> Y_MAX" 邊界標籤，圖例再往上提一點避免重疊
         legend_y = 1.05 if (y_max is not None and max_value > y_max) else 1.02
@@ -300,10 +316,10 @@ def plot_metric(
     for algo in ALGOS:
         if algo not in series:
             continue
-        _draw_series(ax_top, series[algo], algo, metric, x_col, has_std)
-        _draw_series(ax_bot, series[algo], algo, metric, x_col, has_std)
+        _draw_series(ax_top, series[algo], algo, metric, x_col, has_std, floor_zero)
+        _draw_series(ax_bot, series[algo], algo, metric, x_col, has_std, floor_zero)
 
-    ax_bot.set_ylim(0, break_threshold)
+    ax_bot.set_ylim(y_min if y_min is not None else 0, break_threshold)
     ax_top.set_ylim(break_threshold, max_value * 1.05)
 
     # 上方子圖只需要粗略的刻度，下方子圖沿用原本的 6 段刻度
@@ -353,8 +369,8 @@ def main() -> None:
     parser.add_argument("csv_paths", nargs="+", help="Path(s) to checkpoints/*.csv result file(s).")
     parser.add_argument("--x", choices=["dests", "alpha", "qc"], required=True, help="X-axis type.")
     parser.add_argument("--fixed-dests", type=int, default=None, help="For --x alpha: fixed num_dests to filter on.")
-    parser.add_argument("--start-node", type=int, default=None, help="For --x qc: minimum |B| (num_nodes - num_dests) to include.")
-    parser.add_argument("--end-node", type=int, default=None, help="For --x qc: maximum |B| to include.")
+    parser.add_argument("--x-min", type=float, default=None, help="Minimum x value to include (num_dests / alpha / |B| depending on --x).")
+    parser.add_argument("--x-max", type=float, default=None, help="Maximum x value to include.")
     parser.add_argument("--step", type=float, default=None, help="X-axis tick spacing (e.g. --step 5).")
     parser.add_argument(
         "--break-ratio", nargs="?", type=float, const=BREAK_THRESHOLD_DEFAULT, default=None,
@@ -368,6 +384,15 @@ def main() -> None:
         help="Y 軸上限裁切（y-axis clipping）：把 y 軸上限壓到 Y_MAX（例如 160 或 30），"
              "超過的線條會直接衝出圖表頂部，並在衝出處標註實際數值、輸出對應的圖說 "
              "(.caption.txt)。與 --break-ratio 互斥，同時給定時以 --break-ratio 優先。",
+    )
+    parser.add_argument(
+        "--y-min", type=float, default=None, metavar="Y_MIN",
+        help="Y 軸下限：把 y 軸下限設為 Y_MIN，避免圖下方出現大片空白。"
+             "可與 --y-max 併用；會覆蓋 alpha 圖預設的下限 0。",
+    )
+    parser.add_argument(
+        "--metrics", default=None, metavar="M1,M2",
+        help=f"只畫指定的 metric（逗號分隔，可選：{', '.join(METRICS)}）；預設全畫。",
     )
     parser.add_argument("--out-dir", default="img", help="Output directory for figures (default: img/).")
     args = parser.parse_args()
@@ -389,7 +414,7 @@ def main() -> None:
         if len(args.csv_paths) != 1:
             print("--x qc accepts exactly one CSV file (a single qc-sweep result).")
             sys.exit(1)
-        df = load_qc_mode(args.csv_paths[0], args.start_node, args.end_node)
+        df = load_qc_mode(args.csv_paths[0])
         x_col, x_label = "num_b", "|B|"
         name = os.path.splitext(os.path.basename(args.csv_paths[0]))[0]
         out_dir = os.path.join(args.out_dir, f"{name}_qc")
@@ -402,13 +427,20 @@ def main() -> None:
             name = name.split("_")[1]
         out_dir = os.path.join(args.out_dir, f"alpha_{name}_dests_{fixed_label}")
 
+    df = filter_x_range(df, x_col, args.x_min, args.x_max)
+
     os.makedirs(out_dir, exist_ok=True)
 
-    for metric in METRICS:
+    selected = list(METRICS) if args.metrics is None else args.metrics.split(",")
+    for metric in selected:
+        if metric not in METRICS:
+            print(f"Unknown metric: {metric}")
+            sys.exit(1)
         output_path = os.path.join(out_dir, f"{os.path.basename(out_dir)}_{metric}.png")
         plot_metric(
             df, metric, x_col, x_label, output_path, x_step=args.step,
             break_threshold=args.break_ratio, y_max=args.y_max,
+            y_min=args.y_min,
         )
 
     print("All plots generated successfully.")
