@@ -24,18 +24,18 @@ set -euo pipefail
 #   SWEEP_ALPHAS : alpha sweep 要掃的 alpha 清單
 #   FIXED_ALPHA  : 跑 dests / qc sweep 時固定使用的單一 alpha
 # ---------------------------------------------------------
-SWEEP_ALPHAS_TATA="1, 2, 4, 5, 6, 7, 8, 9, 10"
-SWEEP_ALPHAS_ITCD="1, 2, 4, 5, 6, 7, 8, 9, 10"
-SWEEP_ALPHAS_SYNTHETIC="1, 2, 4, 5, 6, 7, 8, 9, 10"
-# SWEEP_ALPHAS_TATA="11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
-# SWEEP_ALPHAS_ITCD="11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
-# SWEEP_ALPHAS_SYNTHETIC="11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
+# SWEEP_ALPHAS_TATA="1, 2, 4, 5, 6, 7, 8, 9, 10"
+# SWEEP_ALPHAS_ITCD="1, 2, 4, 5, 6, 7, 8, 9, 10"
+# SWEEP_ALPHAS_SYNTHETIC="1, 2, 4, 5, 6, 7, 8, 9, 10"
+SWEEP_ALPHAS_TATA="13, 14, 15"
+SWEEP_ALPHAS_ITCD="13, 14, 15"
+SWEEP_ALPHAS_SYNTHETIC="13, 14, 15"
 
-FIXED_ALPHA_TATA="3"
-FIXED_ALPHA_ITCD="3"
-FIXED_ALPHA_SYNTHETIC="3"
+FIXED_ALPHA_TATA="4"
+FIXED_ALPHA_ITCD="4"
+FIXED_ALPHA_SYNTHETIC="4"
 
-DEST_SWEEP_START=20
+DEST_SWEEP_START=40
 DEST_SWEEP_STEP=5
 
 # ---------------------------------------------------------

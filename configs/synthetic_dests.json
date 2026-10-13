@@ -7,7 +7,7 @@
   "area_size": 20.0,
   "waxman_alpha": 0.15,
   "waxman_beta": 10.0,
-  "num_dests": 30,
+  "num_dests": 50,
   "pdqta_level": 2,
   "alpha": 3,
   "seed": 1,

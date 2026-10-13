@@ -8,11 +8,11 @@
   "scale_area_with_qc": true,
   "waxman_alpha": 0.15,
   "waxman_beta": 10.0,
-  "num_dests": 30,
+  "num_dests": 50,
   "pdqta_level": 2,
-  "alpha": 3,
+  "alpha": 4,
   "seed": 1,
   "role_seed": 1,
-  "step_qc": 30,
+  "step_qc": 60,
   "num_runs": 100
 }

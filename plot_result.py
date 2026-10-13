@@ -4,9 +4,25 @@
 If the CSV has "<metric>_std" columns (multi-seed runs aggregated by
 main.py), error bars are drawn automatically; otherwise plain lines.
 
+All figures share one fixed layout (canvas size, axes box, legend and y-label
+positions), so normal, broken-axis and clipped plots line up with each other.
+
+Y-axis options for readability when some baselines are far more costly:
+    --y-max / --y-min   clip the y range; lines leaving the plot are labelled
+                        "> Y_MAX" and described in a .caption.txt file
+    --break-ratio [T]   broken axis at a fixed threshold T (top / bottom axes)
+    --auto-break [G]    broken axis that drops y-intervals no line passes
+                        through (gap >= G of the total range, default 0.02);
+                        falls back to a single axis if there is no such gap.
+                        Combine with --max-segments 2 --lower-frac 0.65 to cut
+                        once and give the lower (QSTA) part 65% of the height.
+
 Usage:
     python plot_result.py experiment/dests_TATA_alpha_10.csv --x dests
     python plot_result.py experiment/dests_TATA_alpha_*.csv --x alpha --fixed-dests 30
+    python plot_result.py experiment/dests_TATA_alpha_4_k_2.csv --x dests --x-min 40 --x-max 60 \\
+        --metrics total_cost --auto-break --max-segments 2 --lower-frac 0.65
+    python plot_result.py experiment/dests_TATA_alpha_*_k_2.csv --x alpha --fixed-dests 50 --y-max 250
 """
 import sys
 import os
@@ -132,6 +148,17 @@ def load_alpha_mode(paths: list[str], fixed_dests: int | None) -> pd.DataFrame:
 
 
 BREAK_THRESHOLD_DEFAULT = 100.0
+AUTO_BREAK_GAP_DEFAULT = 0.02   # 空白區間至少佔整體 y 範圍的比例才會被拿掉
+AUTO_BREAK_MAX_SEGMENTS = 3
+AUTO_BREAK_MIN_RATIO = 0.22     # 單一子圖的最小高度比例，避免離群段被壓成一條線
+AUTO_BREAK_PAD_FRAC = 0.06      # 子圖上下留白（佔該段範圍的比例）
+
+# 一般圖與斷軸圖共用的固定版面（figure 座標），不使用 tight_layout / bbox_inches="tight"，
+# 讓兩種圖的畫布大小、座標軸位置、圖例與 y 軸標籤位置完全一致。
+LAYOUT = dict(left=0.18, right=0.97, bottom=0.14, top=0.80)
+YLABEL_X = 0.035
+ALPHA_Y_LIFT_FRAC = 0.04   # alpha 圖 y 軸下緣低於 0 的幅度（佔 y 軸上限的比例）
+LEGEND_Y = 0.99
 
 
 def _collect_algo_series(df: pd.DataFrame, metric: str, x_col: str) -> dict:
@@ -182,6 +209,48 @@ def _draw_series(ax, df_algo: pd.DataFrame, algo: str, metric: str, x_col: str, 
             markersize=7,
             **STYLES[algo],
         )
+
+
+def _auto_segments(series: dict, metric: str, min_gap_frac: float,
+                   max_segments: int = AUTO_BREAK_MAX_SEGMENTS) -> list[tuple[float, float]]:
+    """把每條線的 y 範圍（各 x 點平均值的 min~max）做區間聯集；沒有任何線經過、
+    且寬度 >= min_gap_frac * 整體範圍的 y 區間視為空白，直接從圖上拿掉。
+    回傳由下而上的 [(lo, hi), ...]（含留白，相鄰段不會重疊）；只有一段代表無空白可拿。"""
+    intervals = sorted((float(d[metric].min()), float(d[metric].max())) for d in series.values())
+    if not intervals:
+        return []
+    span = max(hi for _, hi in intervals) - intervals[0][0]
+    merged = [list(intervals[0])]
+    for lo, hi in intervals[1:]:
+        if lo - merged[-1][1] < min_gap_frac * span:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    while len(merged) > max_segments:  # 段數過多時，從最小的空白開始合併
+        k = min(range(len(merged) - 1), key=lambda i: merged[i + 1][0] - merged[i][1])
+        merged[k][1] = merged[k + 1][1]
+        del merged[k + 1]
+
+    out = []
+    for i, (lo, hi) in enumerate(merged):
+        pad = max(hi - lo, span * 0.02) * AUTO_BREAK_PAD_FRAC
+        pad_lo = pad if i == 0 else min(pad, 0.45 * (lo - merged[i - 1][1]))
+        pad_hi = pad if i == len(merged) - 1 else min(pad, 0.45 * (merged[i + 1][0] - hi))
+        out.append((lo - pad_lo, hi + pad_hi))
+    return out
+
+
+def _finalize_figure(fig, legend_ax, metric: str, output_path: str) -> str:
+    """固定版面 + 圖例/y 軸標籤放在 figure 座標，存成 png 與 pdf，回傳 pdf 路徑。"""
+    fig.subplots_adjust(**LAYOUT)
+    fig.supylabel(METRICS[metric], x=YLABEL_X, fontsize=plt.rcParams["axes.labelsize"])
+    handles, labels = legend_ax.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, LEGEND_Y), ncol=3, frameon=True)
+    fig.savefig(output_path, dpi=PNG_DPI)
+    pdf_path = os.path.splitext(output_path)[0] + ".pdf"
+    fig.savefig(pdf_path)
+    plt.close(fig)
+    return pdf_path
 
 
 def _find_crossing_x(xs: list, ys: list, y_max: float) -> float:
@@ -237,6 +306,9 @@ def plot_metric(
     break_threshold: float | None = None,
     y_max: float | None = None,
     y_min: float | None = None,
+    auto_break: float | None = None,
+    max_segments: int = AUTO_BREAK_MAX_SEGMENTS,
+    lower_frac: float | None = None,
 ) -> None:
     series, has_std = _collect_algo_series(df, metric, x_col)
     floor_zero = x_col == "alpha"  # alpha 圖：Y 軸從 0 開始，error bar 下界不低於 0
@@ -252,16 +324,32 @@ def plot_metric(
             all_values.extend((df_algo[metric] - df_algo[std_col]).tolist())
 
     max_value = max(all_values, default=0)
-    do_break = break_threshold is not None and max_value > break_threshold
 
-    if not do_break:
+    # segments: 由下而上的 [(lo, hi), ...]，height_ratios: 由上而下；None 代表畫單一子圖。
+    # --break-ratio（固定門檻）優先於 --auto-break（自動偵測空白區間）。
+    segments, height_ratios = None, None
+    if break_threshold is not None and max_value > break_threshold:
+        segments = [(y_min if y_min is not None else 0, break_threshold), (break_threshold, max_value * 1.05)]
+        height_ratios = [1, 3]
+    elif auto_break is not None:
+        auto = _auto_segments(series, metric, auto_break, max_segments)
+        if len(auto) > 1:
+            segments = auto
+            if lower_frac is not None and len(auto) == 2:
+                height_ratios = [1 - lower_frac, lower_frac]  # 由上而下：高 baseline / QSTA 附近
+            else:
+                total = sum(hi - lo for lo, hi in auto)
+                height_ratios = [max((hi - lo) / total, AUTO_BREAK_MIN_RATIO) for lo, hi in auto][::-1]
+        else:
+            print(f"Note: no empty y-interval found for {metric}; drawing a single axis.")
+
+    if segments is None:
         fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
         for algo in ALGOS:
             if algo in series:
                 _draw_series(ax, series[algo], algo, metric, x_col, has_std, floor_zero)
 
         ax.set_xlabel(x_label)
-        ax.set_ylabel(METRICS[metric])
         ax.grid(True, linestyle="--", alpha=0.6)
         if x_step is not None:
             ax.xaxis.set_major_locator(MultipleLocator(x_step))
@@ -280,22 +368,14 @@ def plot_metric(
         if y_min is not None:
             ax.set_ylim(bottom=y_min)
         elif floor_zero:
-            ax.set_ylim(bottom=0)
+            # alpha 圖：數值不會低於 0，但讓 0 離 x 軸一小段距離，貼在 x 軸上的線（如 0 值）才看得清楚；
+            # 刻度仍只顯示 >= 0 的值。
+            top = ax.get_ylim()[1]
+            ax.set_ylim(bottom=-ALPHA_Y_LIFT_FRAC * top, top=top)
+            ax.set_yticks([t for t in ax.get_yticks() if 0 <= t <= top])
+            ax.set_ylim(bottom=-ALPHA_Y_LIFT_FRAC * top, top=top)
 
-        # y-max 模式下右上角會有 "> Y_MAX" 邊界標籤，圖例再往上提一點避免重疊
-        legend_y = 1.05 if (y_max is not None and max_value > y_max) else 1.02
-        ax.legend(
-            loc="lower center",
-            bbox_to_anchor=(0.5, legend_y),
-            ncol=3,
-            frameon=True,
-        )
-
-        plt.tight_layout()
-        fig.savefig(output_path, dpi=PNG_DPI, bbox_inches="tight")
-        pdf_path = os.path.splitext(output_path)[0] + ".pdf"
-        fig.savefig(pdf_path, bbox_inches="tight")
-        plt.close(fig)
+        pdf_path = _finalize_figure(fig, ax, metric, output_path)
 
         print(f"Saved: {output_path}")
         print(f"Saved: {pdf_path}")
@@ -307,58 +387,44 @@ def plot_metric(
             print(f"Saved: {caption_path}")
         return
 
-    # --- break-ratio: 上方子圖壓縮顯示超過 break_threshold 的離群值，下方子圖放大顯示門檻以下的主要範圍 ---
-    fig, (ax_top, ax_bot) = plt.subplots(
-        2, 1, sharex=True, figsize=(FIG_WIDTH, FIG_HEIGHT),
-        gridspec_kw={"height_ratios": [1, 3], "hspace": 0.08},
+    # --- 斷軸：每個 segment 一個子圖（由上而下），相鄰子圖以斜線記號隔開 ---
+    # break-ratio 為固定門檻的上下兩段；auto-break 則只保留有線經過的 y 區間。
+    n = len(segments)
+    fig, axes = plt.subplots(
+        n, 1, sharex=True, figsize=(FIG_WIDTH, FIG_HEIGHT),
+        gridspec_kw={"height_ratios": height_ratios, "hspace": 0.05}, squeeze=False,
     )
+    axes = axes[:, 0]
 
-    for algo in ALGOS:
-        if algo not in series:
-            continue
-        _draw_series(ax_top, series[algo], algo, metric, x_col, has_std, floor_zero)
-        _draw_series(ax_bot, series[algo], algo, metric, x_col, has_std, floor_zero)
-
-    ax_bot.set_ylim(y_min if y_min is not None else 0, break_threshold)
-    ax_top.set_ylim(break_threshold, max_value * 1.05)
-
-    # 上方子圖只需要粗略的刻度，下方子圖沿用原本的 6 段刻度
-    ax_top.yaxis.set_major_locator(MaxNLocator(nbins=3))
-    ax_bot.yaxis.set_major_locator(MaxNLocator(nbins=6))
-
-    # 隱藏上下子圖相鄰的邊框，畫上標準的斷裂斜線記號
-    ax_top.spines["bottom"].set_visible(False)
-    ax_bot.spines["top"].set_visible(False)
-    ax_top.tick_params(labeltop=False, bottom=False)
-    ax_bot.xaxis.tick_bottom()
+    for ax, (lo, hi) in zip(axes, segments[::-1]):
+        for algo in ALGOS:
+            if algo in series:
+                _draw_series(ax, series[algo], algo, metric, x_col, has_std, floor_zero)
+        ax.set_ylim(lo, hi)
+        # 最下方子圖沿用原本的 6 段刻度，其餘只需粗略刻度
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6 if ax is axes[-1] else 3))
+        ax.grid(True, linestyle="--", alpha=0.6)
 
     d = 0.5  # 斜線的視覺長度（軸座標系）
     break_kwargs = dict(
         marker=[(-1, -d), (1, d)], markersize=12,
         linestyle="none", color="k", mec="k", mew=1, clip_on=False,
     )
-    ax_top.plot([0, 1], [0, 0], transform=ax_top.transAxes, **break_kwargs)
-    ax_bot.plot([0, 1], [1, 1], transform=ax_bot.transAxes, **break_kwargs)
+    for i, ax in enumerate(axes):
+        if i > 0:
+            ax.spines["top"].set_visible(False)
+            ax.plot([0, 1], [1, 1], transform=ax.transAxes, **break_kwargs)
+        if i < n - 1:
+            ax.spines["bottom"].set_visible(False)
+            ax.tick_params(labeltop=False, bottom=False)
+            ax.plot([0, 1], [0, 0], transform=ax.transAxes, **break_kwargs)
+    axes[-1].xaxis.tick_bottom()
 
-    ax_bot.set_xlabel(x_label)
-    ax_bot.grid(True, linestyle="--", alpha=0.6)
-    ax_top.grid(True, linestyle="--", alpha=0.6)
+    axes[-1].set_xlabel(x_label)
     if x_step is not None:
-        ax_bot.xaxis.set_major_locator(MultipleLocator(x_step))
-    fig.supylabel(METRICS[metric], fontsize=plt.rcParams["axes.labelsize"])
+        axes[-1].xaxis.set_major_locator(MultipleLocator(x_step))
 
-    ax_top.legend(
-        loc="lower center",
-        bbox_to_anchor=(0.5, 1.15),
-        ncol=3,
-        frameon=True,
-    )
-
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=PNG_DPI, bbox_inches="tight")
-    pdf_path = os.path.splitext(output_path)[0] + ".pdf"
-    fig.savefig(pdf_path, bbox_inches="tight")
-    plt.close(fig)
+    pdf_path = _finalize_figure(fig, axes[0], metric, output_path)
 
     print(f"Saved: {output_path}")
     print(f"Saved: {pdf_path}")
@@ -378,6 +444,21 @@ def main() -> None:
         help=f"若某 metric 出現超過 THRESHOLD 的數值，改用上下斷軸子圖繪製，讓 "
              f"<= THRESHOLD 的線幅度更明顯（未超過時仍畫單一子圖）。可不帶數值，"
              f"預設門檻為 {BREAK_THRESHOLD_DEFAULT:g}（例如 --break-ratio 或 --break-ratio 50）。",
+    )
+    parser.add_argument(
+        "--auto-break", nargs="?", type=float, const=AUTO_BREAK_GAP_DEFAULT, default=None,
+        metavar="MIN_GAP",
+        help="自動斷軸：把「沒有任何線經過」的 y 區間拿掉，最多切成 3 段子圖。MIN_GAP 為空白區間"
+             f"佔整體 y 範圍的最小比例（預設 {AUTO_BREAK_GAP_DEFAULT:g}）。若找不到空白區間（例如各線從同一點"
+             "發散的 alpha 圖），改畫單一子圖，此時可搭配 --y-max。與 --break-ratio 同時給定時以 --break-ratio 優先。",
+    )
+    parser.add_argument(
+        "--max-segments", type=int, default=AUTO_BREAK_MAX_SEGMENTS,
+        help="auto-break 最多切成幾段（設 2 = 只切一刀）。",
+    )
+    parser.add_argument(
+        "--lower-frac", type=float, default=None,
+        help="只切一刀時，下方（QSTA 附近）子圖佔的高度比例，例如 0.65。",
     )
     parser.add_argument(
         "--y-max", type=float, default=None, metavar="Y_MAX",
@@ -440,7 +521,8 @@ def main() -> None:
         plot_metric(
             df, metric, x_col, x_label, output_path, x_step=args.step,
             break_threshold=args.break_ratio, y_max=args.y_max,
-            y_min=args.y_min,
+            y_min=args.y_min, auto_break=args.auto_break,
+            max_segments=args.max_segments, lower_frac=args.lower_frac,
         )
 
     print("All plots generated successfully.")
