@@ -1,0 +1,8 @@
+matplotlib==3.11.2
+networkx==3.7
+numpy==2.5.4
+ortools==9.15.6755
+pandas==3.0.6
+protobuf==6.33.6
+pytest==9.1.1
+scipy==1.18.1

@@ -1,0 +1,18 @@
+{
+  "mode": "synthetic",
+  "name": "syn80",
+  "num_nodes": 80,
+  "delay_min_ms": 10.0,
+  "delay_max_ms": 100.0,
+  "area_size": 20.0,
+  "waxman_alpha": 0.15,
+  "waxman_beta": 10.0,
+  "num_dests": 50,
+  "pdqta_level": 2,
+  "alpha": 3,
+  "seed": 1,
+  "role_seed": 1,
+  "step_dests": 5,
+  "num_runs": 100,
+  "_comment": "can set \"num_qc\": 120, to specify the number of quantum computers"
+}
