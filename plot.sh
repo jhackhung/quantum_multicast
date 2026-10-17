@@ -22,8 +22,9 @@ STEP_DESTS=5            # dests 圖 x 軸刻度間距
 DESTS_START="40"          # dests 圖 x 軸範圍（num_dests），留空 = 不限
 DESTS_END="60"
 ALPHA_FIXED_DESTS=50    # alpha 圖固定的 num_dests
-ALPHA_START="7"          # alpha 圖 x 軸範圍（alpha 值），留空 = 不限
-ALPHA_END="15"
+ALPHA_START="4"          # alpha 圖 x 軸範圍（alpha 值），留空 = 不限
+ALPHA_END="12"
+STEP_ALPHA=4            # alpha 圖 x 軸刻度間距；留空 = 自動
 FIXED_ALPHA=4           # dests / qc 圖使用的 alpha（對應 csv 檔名）
 QC_START_NODE="150"        # qc 圖 |B| 範圍，留空 = 不限
 QC_END_NODE="390"
@@ -63,9 +64,9 @@ ITCD            total_cost              -  -
 ITCD            transmission_cost       40  -
 ITCD            computation_cost        -  -
 ITCD            computation_cost_ratio  -  -
-synthetic_150   total_cost              -  -
-synthetic_150   transmission_cost       20  -
-synthetic_150   computation_cost        -  -
+synthetic_150   total_cost              40  300
+synthetic_150   transmission_cost       25  -
+synthetic_150   computation_cost        -  300
 synthetic_150   computation_cost_ratio  -  -
 "
 
@@ -116,6 +117,7 @@ run_alpha() {
     local range=()
     [ -n "$ALPHA_START" ] && range+=(--x-min "$ALPHA_START")
     [ -n "$ALPHA_END" ] && range+=(--x-max "$ALPHA_END")
+    [ -n "$STEP_ALPHA" ] && range+=(--step "$STEP_ALPHA")
     while read -r topo metric ymin ymax; do
         [ -z "${topo:-}" ] && continue
         limit_args "$ymin" "$ymax" "$metric"

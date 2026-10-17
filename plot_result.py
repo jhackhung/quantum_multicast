@@ -16,6 +16,12 @@ Y-axis options for readability when some baselines are far more costly:
                         falls back to a single axis if there is no such gap.
                         Combine with --max-segments 2 --lower-frac 0.65 to cut
                         once and give the lower (QSTA) part 65% of the height.
+    --lower-step S / --upper-step S
+                        fixed y tick spacing for the lower / upper broken-axis
+                        panels (default: automatic).
+    --lower-range LO HI / --upper-range LO HI
+                        manually set the y range of the lower / top broken-axis
+                        panel (lines outside the range are clipped).
 
 Usage:
     python plot_result.py experiment/dests_TATA_alpha_10.csv --x dests
@@ -309,6 +315,10 @@ def plot_metric(
     auto_break: float | None = None,
     max_segments: int = AUTO_BREAK_MAX_SEGMENTS,
     lower_frac: float | None = None,
+    lower_step: float | None = None,
+    upper_step: float | None = None,
+    lower_range: tuple[float, float] | None = None,
+    upper_range: tuple[float, float] | None = None,
 ) -> None:
     series, has_std = _collect_algo_series(df, metric, x_col)
     floor_zero = x_col == "alpha"  # alpha 圖：Y 軸從 0 開始，error bar 下界不低於 0
@@ -343,6 +353,14 @@ def plot_metric(
         else:
             print(f"Note: no empty y-interval found for {metric}; drawing a single axis.")
 
+    # 手動覆寫斷軸各段的 y 範圍（segments 由下而上；最下段 = lower，最上段 = upper）
+    if segments is not None:
+        segments = list(segments)
+        if lower_range is not None:
+            segments[0] = tuple(lower_range)
+        if upper_range is not None:
+            segments[-1] = tuple(upper_range)
+
     if segments is None:
         fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
         for algo in ALGOS:
@@ -357,12 +375,12 @@ def plot_metric(
         caption = None
         if y_max is not None and max_value > y_max:
             # y-axis clipping：線條被砍在圖表頂部之外，靠圖說 + 邊界標籤讓讀者知道實際數值。
-            clip_captions = _annotate_clipped_lines(ax, series, metric, x_col, y_max)
+            # clip_captions = _annotate_clipped_lines(ax, series, metric, x_col, y_max)
             ax.set_ylim(top=y_max)
-            caption = (
-                f"The y-axis is truncated at {format_number_label(y_max)} to clearly display "
-                f"the trend of the lower-cost algorithms. " + " ".join(f"{c}." for c in clip_captions)
-            )
+            # caption = (
+            #     f"The y-axis is truncated at {format_number_label(y_max)} to clearly display "
+            #     f"the trend of the lower-cost algorithms. " + " ".join(f"{c}." for c in clip_captions)
+            # )
         else:
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
         if y_min is not None:
@@ -401,8 +419,12 @@ def plot_metric(
             if algo in series:
                 _draw_series(ax, series[algo], algo, metric, x_col, has_std, floor_zero)
         ax.set_ylim(lo, hi)
-        # 最下方子圖沿用原本的 6 段刻度，其餘只需粗略刻度
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=6 if ax is axes[-1] else 3))
+        # 最下方子圖沿用原本的 6 段刻度，其餘只需粗略刻度；--lower-step / --upper-step 可固定間距
+        step = lower_step if ax is axes[-1] else upper_step
+        if step is not None:
+            ax.yaxis.set_major_locator(MultipleLocator(step))
+        else:
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=6 if ax is axes[-1] else 3))
         ax.grid(True, linestyle="--", alpha=0.6)
 
     d = 0.5  # 斜線的視覺長度（軸座標系）
@@ -459,6 +481,22 @@ def main() -> None:
     parser.add_argument(
         "--lower-frac", type=float, default=None,
         help="只切一刀時，下方（QSTA 附近）子圖佔的高度比例，例如 0.65。",
+    )
+    parser.add_argument(
+        "--lower-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
+        help="斷軸時，手動指定下方子圖的 y 範圍，例如 --lower-range 20 60。",
+    )
+    parser.add_argument(
+        "--upper-range", type=float, nargs=2, default=None, metavar=("LO", "HI"),
+        help="斷軸時，手動指定最上方子圖的 y 範圍。",
+    )
+    parser.add_argument(
+        "--lower-step", type=float, default=None,
+        help="斷軸時，下方子圖 y 軸刻度間距（例如 10）；未設定則自動。",
+    )
+    parser.add_argument(
+        "--upper-step", type=float, default=None,
+        help="斷軸時，上方子圖（非最下方者）y 軸刻度間距；未設定則自動。",
     )
     parser.add_argument(
         "--y-max", type=float, default=None, metavar="Y_MAX",
@@ -523,6 +561,8 @@ def main() -> None:
             break_threshold=args.break_ratio, y_max=args.y_max,
             y_min=args.y_min, auto_break=args.auto_break,
             max_segments=args.max_segments, lower_frac=args.lower_frac,
+            lower_step=args.lower_step, upper_step=args.upper_step,
+            lower_range=args.lower_range, upper_range=args.upper_range,
         )
 
     print("All plots generated successfully.")
