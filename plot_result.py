@@ -19,6 +19,7 @@ Y-axis options for readability when some baselines are far more costly:
     --lower-step S / --upper-step S
                         fixed y tick spacing for the lower / upper broken-axis
                         panels (default: automatic).
+    --y-step S          fixed y tick spacing for single-axis (non-broken) plots.
     --lower-range LO HI / --upper-range LO HI
                         manually set the y range of the lower / top broken-axis
                         panel (lines outside the range are clipped).
@@ -33,6 +34,7 @@ Usage:
 import sys
 import os
 import re
+import math
 import argparse
 import pandas as pd
 import matplotlib
@@ -42,23 +44,25 @@ from matplotlib.ticker import MaxNLocator, MultipleLocator
 matplotlib.use("Agg")
 
 plt.rcParams.update({
-    "font.size": 18,
-    "axes.titlesize": 20,
-    "axes.labelsize": 20,
-    "xtick.labelsize": 16,
-    "ytick.labelsize": 16,
-    "legend.fontsize": 14,
-    "lines.linewidth": 2.2,
-    "axes.linewidth": 1.0,
+    "font.size": 25,
+    "axes.titlesize": 30,
+    "axes.labelsize": 30,
+    "xtick.labelsize": 25,
+    "ytick.labelsize": 25,
+    "legend.fontsize": 22,
+    "lines.linewidth": 2.4,
+    "axes.linewidth": 1.1,
     "xtick.major.width": 1.0,
     "ytick.major.width": 1.0,
+    "xtick.major.size": 4,
+    "ytick.major.size": 4,
     "pdf.fonttype": 42,
-    "ps.fonttype": 42,
+    "ps.fonttype": 42
 })
 
-FIG_WIDTH = 8.0
-FIG_HEIGHT = 6.0
-PNG_DPI = 300
+FIG_WIDTH = 8.8
+FIG_HEIGHT = 6.8
+PNG_DPI = 600
 
 ALGOS = ["SPT", "CLEA", "DMST", "KMB", "MFCS", "QSTA"]
 
@@ -162,7 +166,7 @@ AUTO_BREAK_PAD_FRAC = 0.06      # 子圖上下留白（佔該段範圍的比例�
 # 一般圖與斷軸圖共用的固定版面（figure 座標），不使用 tight_layout / bbox_inches="tight"，
 # 讓兩種圖的畫布大小、座標軸位置、圖例與 y 軸標籤位置完全一致。
 LAYOUT = dict(left=0.18, right=0.97, bottom=0.14, top=0.80)
-YLABEL_X = 0.035
+YLABEL_X = 0.025
 ALPHA_Y_LIFT_FRAC = 0.04   # alpha 圖 y 軸下緣低於 0 的幅度（佔 y 軸上限的比例）
 LEGEND_Y = 0.99
 
@@ -215,6 +219,16 @@ def _draw_series(ax, df_algo: pd.DataFrame, algo: str, metric: str, x_col: str, 
             markersize=7,
             **STYLES[algo],
         )
+
+
+def _apply_x_ticks(ax, series: dict, x_col: str, x_step: float | None) -> None:
+    """x 軸刻度預設對應資料點的 x 值；有指定 --step 時改用固定間距。"""
+    if x_step is not None:
+        ax.xaxis.set_major_locator(MultipleLocator(x_step))
+        return
+    xs = sorted({x for d in series.values() for x in d[x_col]})
+    ax.set_xticks(xs)
+    ax.set_xticklabels([format_number_label(x) for x in xs])
 
 
 def _auto_segments(series: dict, metric: str, min_gap_frac: float,
@@ -317,6 +331,7 @@ def plot_metric(
     lower_frac: float | None = None,
     lower_step: float | None = None,
     upper_step: float | None = None,
+    y_step: float | None = None,
     lower_range: tuple[float, float] | None = None,
     upper_range: tuple[float, float] | None = None,
 ) -> None:
@@ -369,8 +384,7 @@ def plot_metric(
 
         ax.set_xlabel(x_label)
         ax.grid(True, linestyle="--", alpha=0.6)
-        if x_step is not None:
-            ax.xaxis.set_major_locator(MultipleLocator(x_step))
+        _apply_x_ticks(ax, series, x_col, x_step)
 
         caption = None
         if y_max is not None and max_value > y_max:
@@ -382,7 +396,18 @@ def plot_metric(
             #     f"the trend of the lower-cost algorithms. " + " ".join(f"{c}." for c in clip_captions)
             # )
         else:
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        if y_step is not None:
+            ax.yaxis.set_major_locator(MultipleLocator(y_step))
+            # 把 y 範圍補到 step 的整數倍，最上面 / 最下面的刻度才不會因為落在範圍外而不顯示
+            y_lo, y_hi = ax.get_ylim()
+            if y_max is not None:
+                y_hi = y_max
+            else:
+                y_hi = math.ceil(y_hi / y_step - 1e-9) * y_step
+            if y_min is None and not floor_zero:
+                y_lo = math.floor(y_lo / y_step + 1e-9) * y_step
+            ax.set_ylim(y_lo, y_hi)
         if y_min is not None:
             ax.set_ylim(bottom=y_min)
         elif floor_zero:
@@ -424,7 +449,7 @@ def plot_metric(
         if step is not None:
             ax.yaxis.set_major_locator(MultipleLocator(step))
         else:
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=6 if ax is axes[-1] else 3))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=5 if ax is axes[-1] else 3))
         ax.grid(True, linestyle="--", alpha=0.6)
 
     d = 0.5  # 斜線的視覺長度（軸座標系）
@@ -443,8 +468,7 @@ def plot_metric(
     axes[-1].xaxis.tick_bottom()
 
     axes[-1].set_xlabel(x_label)
-    if x_step is not None:
-        axes[-1].xaxis.set_major_locator(MultipleLocator(x_step))
+    _apply_x_ticks(axes[-1], series, x_col, x_step)
 
     pdf_path = _finalize_figure(fig, axes[0], metric, output_path)
 
@@ -493,6 +517,10 @@ def main() -> None:
     parser.add_argument(
         "--lower-step", type=float, default=None,
         help="斷軸時，下方子圖 y 軸刻度間距（例如 10）；未設定則自動。",
+    )
+    parser.add_argument(
+        "--y-step", type=float, default=None,
+        help="單軸圖 y 軸刻度間距（例如 50）；未設定則自動。斷軸圖請用 --lower-step / --upper-step。",
     )
     parser.add_argument(
         "--upper-step", type=float, default=None,
@@ -561,7 +589,7 @@ def main() -> None:
             break_threshold=args.break_ratio, y_max=args.y_max,
             y_min=args.y_min, auto_break=args.auto_break,
             max_segments=args.max_segments, lower_frac=args.lower_frac,
-            lower_step=args.lower_step, upper_step=args.upper_step,
+            lower_step=args.lower_step, upper_step=args.upper_step, y_step=args.y_step,
             lower_range=args.lower_range, upper_range=args.upper_range,
         )
 

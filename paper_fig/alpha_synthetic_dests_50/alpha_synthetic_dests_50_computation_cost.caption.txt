@@ -1,0 +1,1 @@
+The y-axis is truncated at 300 to clearly display the trend of the lower-cost algorithms. CLEA increases up to 688 at alpha=12. KMB increases up to 603 at alpha=12. MFCS increases up to 423 at alpha=12.

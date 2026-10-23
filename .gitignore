@@ -4,3 +4,14 @@ output_graph/*
 tree_visualize/*
 checkpoints_old/*
 checkpoints/*
+img_with_original_delay_ms_weights/*
+img_random_weight/*
+experiment_random_weight/*
+experiment/all_external/*
+experiment/alpha*/*
+experiment/distance*/*
+experiment/week*/*
+experiment/other*
+experiment_time/*
+img/week*/*
+img/*

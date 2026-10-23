@@ -22,9 +22,9 @@ STEP_DESTS=5            # dests 圖 x 軸刻度間距
 DESTS_START="40"          # dests 圖 x 軸範圍（num_dests），留空 = 不限
 DESTS_END="60"
 ALPHA_FIXED_DESTS=50    # alpha 圖固定的 num_dests
-ALPHA_START="4"          # alpha 圖 x 軸範圍（alpha 值），留空 = 不限
-ALPHA_END="12"
-STEP_ALPHA=4            # alpha 圖 x 軸刻度間距；留空 = 自動
+ALPHA_START="2"          # alpha 圖 x 軸範圍（alpha 值），留空 = 不限
+ALPHA_END="10"
+STEP_ALPHA=2            # alpha 圖 x 軸刻度間距；留空 = 自動
 FIXED_ALPHA=4           # dests / qc 圖使用的 alpha（對應 csv 檔名）
 QC_START_NODE="150"        # qc 圖 |B| 範圍，留空 = 不限
 QC_END_NODE="390"
@@ -32,7 +32,7 @@ QC_FIXED_DESTS=50
 AUTO_BREAK=${AUTO_BREAK:-1}   # 1 = 啟用 --auto-break（自動拿掉沒有線經過的 y 區間）；也可 AUTO_BREAK=1 ./plot.sh 覆寫
 AUTO_BREAK_METRICS="total_cost"   # 只對這些 metric 啟用 auto-break（空白分隔）；其餘走一般圖
 MAX_SEGMENTS=${MAX_SEGMENTS:-2}   # auto-break 最多切成幾段（2 = 只切一刀）
-LOWER_FRAC=${LOWER_FRAC:-0.65}    # 只切一刀時 QSTA 附近（下方）子圖佔的高度比例；設成空字串 = 依資料範圍自動分配
+LOWER_FRAC=${LOWER_FRAC:-0.75}    # 只切一刀時 QSTA 附近（下方）子圖佔的高度比例；設成空字串 = 依資料範圍自動分配
 
 # ---------------------------------------------------------
 # dests sweep：x = num_dests
