@@ -3,6 +3,7 @@ from __future__ import annotations
 import heapq
 import itertools
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple, FrozenSet
 from functools import lru_cache
@@ -342,4 +343,27 @@ def build_and_evaluate_qsta(qn: QuantumNetwork, alpha: float, k: int = 2):
     t_final = tbqcm(W, qn, t_temp, alpha)
     atomic_edges, metrics, b = evaluate_qsta_tree(qn, W, pred_trees, t_final, alpha, k=k)
     return atomic_edges, metrics, b
-                
+
+def build_and_evaluate_qsta_variants(qn: QuantumNetwork, alpha: float, k: int = 2):
+    """PDQTA 只算一次，同時回傳 Raw（PDQTA 輸出直接評分）與 TBQCM（再做 TBQCM）兩個結果。
+
+    回傳 [(variant, atomic_edges, metrics, b, build_time_sec), ...]，variant 為 "RAW" / "TBQCM"。
+    build_time_sec 是該版本單獨執行的時間（TBQCM 含 PDQTA 時間，不含 Raw 的評分時間），
+    TBQCM 的結果與 build_and_evaluate_qsta 完全相同。
+    """
+    t0 = time.perf_counter()
+    W, pred_trees = build_qcn(qn)
+    t_temp = pdqta(W, qn, i=k, r=qn.s, m=len(qn.D), X=set(qn.D), alpha=alpha)
+    shared = time.perf_counter() - t0
+
+    t1 = time.perf_counter()
+    raw = evaluate_qsta_tree(qn, W, pred_trees, t_temp, alpha, k=k)
+    raw_time = shared + time.perf_counter() - t1
+
+    t2 = time.perf_counter()
+    t_final = tbqcm(W, qn, t_temp, alpha)
+    tb = evaluate_qsta_tree(qn, W, pred_trees, t_final, alpha, k=k)
+    tb_time = shared + time.perf_counter() - t2
+
+    return [("RAW", *raw, raw_time), ("TBQCM", *tb, tb_time)]
+

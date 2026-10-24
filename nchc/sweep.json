@@ -1,0 +1,8 @@
+{
+  "config": "configs/synthetic_qc.json",
+  "sweep": "qc",
+  "values": [150],
+  "alphas": [4],
+  "algos": "qsta_split",
+  "n_seeds": 100
+}

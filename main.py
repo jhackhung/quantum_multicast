@@ -66,8 +66,13 @@ ALGO_REGISTRY = {
     "dmst": lambda qn: DMST.build_dst_tree(qn, i=2),
     "kmb": KMB.build_kmb_tree,
     "mfcs": MFCS.build_mfcs_tree,
-    "qsta": None
+    "qsta": None,        # 論文完整 QSTA（PDQTA + TBQCM），輸出一列 "QSTA"
+    "qsta_split": None,  # 同一次 PDQTA 分別輸出 QSTA_RAW_LABEL / QSTA_TBQCM_LABEL 兩列
 }
+
+# "all" 不含 qsta_split（與 qsta 重複計算）；要分開的結果請明確指定 qsta_split
+EXCLUDED_FROM_ALL = {"qsta_split"}
+QSTA_SPLIT_LABELS = {"RAW": "QSTA-Raw", "TBQCM": "QSTA_TBQCM"}
 
 ALGOS_WITH_CANDIDATE_NODES = {"dmst", "kmb", "mfcs"}
 DEFAULT_PLACEMENT_MODE: Dict[str, str] = {
@@ -80,7 +85,7 @@ DEFAULT_PLACEMENT_MODE: Dict[str, str] = {
 
 def parse_algos(spec: str | None) -> list[str]:
     if spec is None or spec == "all":
-        return list(ALGO_REGISTRY.keys())
+        return [a for a in ALGO_REGISTRY if a not in EXCLUDED_FROM_ALL]
     return [a.strip() for a in spec.split(",")]
 
 def validate_no_dest_forwarding(qn: QuantumNetwork, tree_edges: set[tuple], algo_name: str) -> None:
@@ -95,6 +100,41 @@ def validate_no_dest_forwarding(qn: QuantumNetwork, tree_edges: set[tuple], algo
             f"[{algo_name}] destination node(s) used as transmitter (forwarding to a child): "
             f"{sorted(str(u) for u in violators)}"
         )
+
+def run_algo(qn: QuantumNetwork, algo_name: str, alpha: float, k: int) -> list[dict]:
+    """建樹並評分。回傳 [{"label", "edges", "metrics", "b", "build_time"}]：
+    多數 algo 一筆，qsta_split 兩筆（QSTA-Raw、QSTA_TBQCM）。
+    協定違規或無法評分時 raise ValueError，由呼叫端決定如何略過。"""
+    if algo_name == "qsta_split":
+        outs = [
+            (QSTA_SPLIT_LABELS[variant], edges, metrics, b, build_time)
+            for variant, edges, metrics, b, build_time in QSTA.build_and_evaluate_qsta_variants(qn, alpha=alpha, k=k)
+        ]
+    elif algo_name == "qsta":
+        start = time.time()
+        edges, metrics, b = QSTA.build_and_evaluate_qsta(qn, alpha=alpha, k=k)
+        outs = [(algo_name.upper(), edges, metrics, b, time.time() - start)]
+    else:
+        start = time.time()
+        candidates = None
+        if algo_name in ALGOS_WITH_CANDIDATE_NODES:
+            edges, candidates = ALGO_REGISTRY[algo_name](qn)
+        else:
+            edges = ALGO_REGISTRY[algo_name](qn)
+        build_time = time.time() - start
+        validate_no_dest_forwarding(qn, edges, algo_name)
+        metrics, b = evaluate.evaluate_tree(
+            qn, edges, alpha=alpha, placement_mode=DEFAULT_PLACEMENT_MODE.get(algo_name, "branch"), k=k,
+            algo_candidate_nodes=candidates,
+        )
+        outs = [(algo_name.upper(), edges, metrics, b, build_time)]
+
+    for label, edges, *_ in outs:
+        validate_no_dest_forwarding(qn, edges, label)
+    return [
+        {"label": label, "edges": edges, "metrics": metrics, "b": b, "build_time": build_time}
+        for label, edges, metrics, b, build_time in outs
+    ]
 
 def upsert_results(results: list[dict], path: str) -> None:
     """把 results 併入既有 csv：同 (graph, algo) 的舊列被取代，其餘列保留。
@@ -236,57 +276,32 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
         run_results = list(runs.get(run_key, []))  # 保留這個 seed 之前已經跑好的 algo 結果
         for algo_name in pending_algos:
             print(f"\n--- Building {algo_name.upper()} tree for {qn.name} (run {run_idx})... ---")
-            start_time = time.time()
-
-            algo_candidate_nodes = None
-            if algo_name == "qsta":
-                tree_edges, metrics, b = QSTA.build_and_evaluate_qsta(qn, alpha=alpha, k=k)
-            elif algo_name in ALGOS_WITH_CANDIDATE_NODES:
-                tree_edges, algo_candidate_nodes = ALGO_REGISTRY[algo_name](qn)
-            else:
-                tree_edges = ALGO_REGISTRY[algo_name](qn)
-
-            build_time = time.time() - start_time
-            print(f"\nTotal execution time: {build_time:.4f} seconds.")
-
             try:
-                validate_no_dest_forwarding(qn, tree_edges, algo_name)
+                outputs = run_algo(qn, algo_name, alpha, k)
             except ValueError as e:
-                print(f"[WARN] {e}")
+                print(f"[WARN] {algo_name} 略過: {e}")
                 mark_attempted(attempted, run_key, algo_name, ckpt_path, state)
                 continue
 
-            if algo_name != "qsta":
-                placement_mode = DEFAULT_PLACEMENT_MODE.get(algo_name, "branch")
-                try:
-                    metrics, b = evaluate.evaluate_tree(
-                        qn, tree_edges, alpha=alpha, placement_mode=placement_mode, k=k,
-                        algo_candidate_nodes=algo_candidate_nodes,
-                    )
-                except ValueError as e:
-                    print(f"[WARN] {algo_name} 產生的樹無法評分，略過: {e}")
-                    mark_attempted(attempted, run_key, algo_name, ckpt_path, state)
-                    continue
-
-            print(
-                f"num_edges = {len(tree_edges)}, "
-                f"total_cost = {metrics['total_cost']:.4f} "
-                f"(transmission = {metrics['transmission_cost']:.4f}, "
-                f"computation = {metrics['computation_cost']:.4f}), "
-                f"no_lqdc_total_cost = {metrics['no_lqdc_total_cost']:.4f}"
-            )
-
-            result_row = {
-                "timestamp":  datetime.now().isoformat(timespec="seconds"),
-                "graph": f"{qn.name}_d{len(qn.D)}_b{len(qn.B)}",
-                "algo": algo_name.upper(),
-                "num_runs": run_idx,
-                "base_seed": base_seed,
-                "build_time_sec": build_time,
-                **metrics,
-            }
-
-            run_results.append(result_row)
+            for out in outputs:
+                metrics = out["metrics"]
+                print(f"\n[{out['label']}] execution time: {out['build_time']:.4f} seconds.")
+                print(
+                    f"num_edges = {len(out['edges'])}, "
+                    f"total_cost = {metrics['total_cost']:.4f} "
+                    f"(transmission = {metrics['transmission_cost']:.4f}, "
+                    f"computation = {metrics['computation_cost']:.4f}), "
+                    f"no_lqdc_total_cost = {metrics['no_lqdc_total_cost']:.4f}"
+                )
+                run_results.append({
+                    "timestamp":  datetime.now().isoformat(timespec="seconds"),
+                    "graph": f"{qn.name}_d{len(qn.D)}_b{len(qn.B)}",
+                    "algo": out["label"],
+                    "num_runs": run_idx,
+                    "base_seed": base_seed,
+                    "build_time_sec": out["build_time"],
+                    **metrics,
+                })
 
             # checkpoint after every algo, so a mid-run interruption only
             # loses the current algo, not the whole seed
@@ -308,7 +323,7 @@ def run_alpha(cfg: dict, sweep_x: str, algos: list[str], num_runs: int, base_see
 
     os.makedirs(EXPERIMENT_DIR, exist_ok=True)
     if (sweep_x == "qc"):
-        output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_k_{k}_d{len(qn.D)}.csv")
+        output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_k_{k}_d{num_dests}.csv")
     else:    
         output_path = os.path.join(EXPERIMENT_DIR, f"{sweep_x}_{graph_name}_alpha_{alpha}_k_{k}.csv")
     
