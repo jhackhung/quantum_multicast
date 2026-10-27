@@ -18,7 +18,7 @@ cd /work/$USER/quantum_multicast   # 所有指令都在專案目錄下跑
 mkdir -p logs                      # sbatch 之前 logs/ 就要存在，否則 Slurm 寫不了 log
 
 sbatch nchc/smoke_test.sh          # 1. 冒煙測試（ctest，小規模）
-sbatch nchc/probe_k2.sh            # 2. 探測（ct56），量時間與記憶體
+K=3 sbatch nchc/probe.sh           # 2. 探測（ct56，K=3 才是要估的），量時間與記憶體
                                    # 3. 看 probe 結果決定 k=3 是否可行  ← 決策點
 sbatch nchc/run_k.sh               # 4. 正式 100 seed（第一批 0-79），分兩批，見下
 python nchc/progress.py            #    看進度
@@ -34,7 +34,7 @@ python nchc/merge_results.py --runs runs --k 3 --out merged_k3
 | `sweep.json` | 實驗設定：config、sweep 類型（dests/qc）、sweep 值、alpha、algos、seed 數 |
 | `env.sh` | 載入 conda 環境（被各腳本 source） |
 | `smoke_test.sh` | 小規模冒煙測試（ctest），確認環境與 merge 都正確 |
-| `probe_k2.sh` | 1 seed、k=2、最大 sweep 值，量 wall time 與 peak RSS |
+| `probe.sh` | 1 seed、k 由 `K` 指定（預設 2）、最大 sweep 值，量 wall time 與 peak RSS |
 | `run_k.sh` | 100 seed 的 job array，k 由環境變數 `K` 指定（預設 3） |
 | `run_seed.py` | 單一 task 實際執行的程式：跑一個 seed 的整個 sweep |
 | `progress.py` | 看進度；`--pending` 列出還沒跑完的 task id |
@@ -94,14 +94,14 @@ ls runs/smoke_seed*/raw/*.json
 cat merged_smoke/all_aggregated.csv
 ```
 
-### 3. 跑 probe（k=2，單 seed）
+### 3. 跑 probe（單 seed；要估 k=3 就用 `K=3`）
 
 ```bash
-sbatch nchc/probe_k2.sh
+K=3 sbatch nchc/probe.sh        # K 預設 2；時間不夠可 sbatch --time=... 覆寫
 ```
 
 ```bash
-grep -E "Elapsed \(wall clock\)|Maximum resident" logs/probe_k2_*.err
+grep -E "Elapsed \(wall clock\)|Maximum resident" logs/probe_*.err
 ```
 
 | 數字 | 用途 |
@@ -112,7 +112,7 @@ grep -E "Elapsed \(wall clock\)|Maximum resident" logs/probe_k2_*.err
 ### 4. 決策點 ← 不要跳過
 
 本地實測（k=3、`|D|=10`、synthetic 150 nodes）QSTA 單次 build 約 260 秒，`|D|=15` 更久；
-qc sweep 的 `|D|=50`、最多 390 nodes 的 k=3 耗時目前**沒有實測**，需靠 probe（k=2）外推。
+qc sweep 的 `|D|=50`、最多 390 nodes 的 k=3 耗時目前**沒有實測**，需用 `K=3` 的 probe 量（k=2 的結果不能外推到 k=3，兩者差距很大）。
 單一 task 要跑完整個 sweep，若總時間超過 `ct56` 的 4 天上限，task 會被砍掉；
 `run_seed.py` 每跑完一個 algo 就存檔，被砍後重送會從沒跑完的點續跑，不會整個 seed 重來。
 

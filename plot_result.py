@@ -30,12 +30,18 @@ Usage:
     python plot_result.py experiment/dests_TATA_alpha_4_k_2.csv --x dests --x-min 40 --x-max 60 \\
         --metrics total_cost --auto-break --max-segments 2 --lower-frac 0.65
     python plot_result.py experiment/dests_TATA_alpha_*_k_2.csv --x alpha --fixed-dests 50 --y-max 250
+
+    # k 比較（grouped bar chart）：自動找 experiment/qc_synthetic_alpha_4_k_*_d50.csv，取 |B|=150
+    python plot_result.py --x k
+    python plot_result.py --x k --num-b 210 --num-dests 50 --alpha 4 --metrics total_cost --y-max 150
+    python plot_result.py experiment/qc_synthetic_alpha_4_k_1_d50.csv experiment/qc_synthetic_alpha_4_k_3_d50.csv --x k
 """
 import sys
 import os
 import re
 import math
 import argparse
+import glob
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
@@ -64,7 +70,7 @@ FIG_WIDTH = 8.8
 FIG_HEIGHT = 6.8
 PNG_DPI = 600
 
-ALGOS = ["SPT", "CLEA", "DMST", "KMB", "MFCS", "QSTA"]
+ALGOS = ["SPT", "CLEA", "DMST", "KMB", "MFCS", "QSTA", "QSTA-Raw", "QSTA_TBQCM"]  # 不在 CSV 裡的會自動略過
 
 STYLES = {
     "SPT":  {"color": "green", "marker": "o", "linestyle": "-"},
@@ -73,6 +79,9 @@ STYLES = {
     "KMB":  {"color": "lightblue", "marker": "x", "linestyle": "-"},
     "MFCS": {"color": "gold", "marker": "x", "linestyle": "-"},
     "QSTA": {"color": "blue", "marker": "D", "linestyle": "-"},
+    # main.py 的 qsta_split：Raw = PDQTA 輸出，TBQCM = 論文完整 QSTA（配色同 ilp/plot_qc_strict.py）
+    "QSTA-Raw": {"color": "red", "marker": "v", "linestyle": "-"},
+    "QSTA_TBQCM": {"color": "blue", "marker": "D", "linestyle": "-"},
 }
 
 METRICS = {
@@ -154,6 +163,34 @@ def load_alpha_mode(paths: list[str], fixed_dests: int | None) -> pd.DataFrame:
 
     if not frames:
         raise ValueError("No rows found after filtering by fixed num_dests.")
+    return pd.concat(frames, ignore_index=True)
+
+
+def extract_k_from_path(path: str) -> int:
+    match = re.search(r"_k_(\d+)", os.path.basename(path))
+    if not match:
+        raise ValueError(f"Cannot extract k from filename: {path}")
+    return int(match.group(1))
+
+
+def load_k_mode(paths: list[str], num_b: int, num_dests: int, alpha: float) -> pd.DataFrame:
+    """讀多個 qc CSV（每個 k 一個檔），只留 |B|=num_b、|D|=num_dests、檔名 alpha 相符的列，加上 k 欄。"""
+    frames = []
+    for path in paths:
+        if extract_alpha_from_path(path) != alpha:
+            print(f"Warning: skip {os.path.basename(path)} (alpha != {format_number_label(alpha)})")
+            continue
+        df = pd.read_csv(path)
+        df["num_b"] = parse_num_b_from_graph(df)
+        df["num_dests"] = parse_dests_from_graph(df)
+        df = df[(df["num_b"] == num_b) & (df["num_dests"] == num_dests)].copy()
+        if df.empty:
+            print(f"Warning: {os.path.basename(path)} has no rows with |B|={num_b}, dests={num_dests}")
+            continue
+        df["k"] = extract_k_from_path(path)
+        frames.append(df)
+    if not frames:
+        raise ValueError(f"No rows found for |B|={num_b}, dests={num_dests}, alpha={format_number_label(alpha)}.")
     return pd.concat(frames, ignore_index=True)
 
 
@@ -260,12 +297,14 @@ def _auto_segments(series: dict, metric: str, min_gap_frac: float,
     return out
 
 
-def _finalize_figure(fig, legend_ax, metric: str, output_path: str) -> str:
+def _finalize_figure(fig, legend_ax, metric: str, output_path: str, legend_ncol: int = 3,
+                     legend_fontsize: float | None = None) -> str:
     """固定版面 + 圖例/y 軸標籤放在 figure 座標，存成 png 與 pdf，回傳 pdf 路徑。"""
     fig.subplots_adjust(**LAYOUT)
     fig.supylabel(METRICS[metric], x=YLABEL_X, fontsize=plt.rcParams["axes.labelsize"])
     handles, labels = legend_ax.get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, LEGEND_Y), ncol=3, frameon=True)
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, LEGEND_Y), ncol=legend_ncol, frameon=True,
+               fontsize=legend_fontsize)
     fig.savefig(output_path, dpi=PNG_DPI)
     pdf_path = os.path.splitext(output_path)[0] + ".pdf"
     fig.savefig(pdf_path)
@@ -476,10 +515,82 @@ def plot_metric(
     print(f"Saved: {pdf_path}")
 
 
+def plot_k_bars(
+    df: pd.DataFrame,
+    metric: str,
+    output_path: str,
+    y_min: float | None = None,
+    y_max: float | None = None,
+    y_step: float | None = None,
+) -> None:
+    """grouped bar chart：x 軸為 k，每組內每個 algo 一根 bar；有 <metric>_std 欄位就畫 error bar。
+    某個 k 缺某個 algo 時該根 bar 留空。"""
+    std_col = f"{metric}_std"
+    has_std = std_col in df.columns
+    agg = {metric: "mean"}
+    if has_std:
+        agg[std_col] = lambda s: (s.pow(2).mean()) ** 0.5  # 同 _collect_algo_series 的合併方式
+    stats = df.groupby(["algo", "k"]).agg(agg)
+
+    ks = sorted(df["k"].unique())
+    algos = [a for a in ALGOS if a in set(df["algo"])]
+    width = 0.8 / len(algos)  # 每根 bar 同寬；某個 k 缺的 algo 不畫，該組剩下的 bar 置中
+
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
+    for algo in algos:
+        xs, heights, errs = [], [], []
+        for j, k in enumerate(ks):
+            present = [a for a in algos if (a, k) in stats.index]
+            if algo not in present:
+                continue
+            xs.append(j + (present.index(algo) - (len(present) - 1) / 2) * width)
+            heights.append(stats.loc[(algo, k), metric])
+            errs.append(stats.loc[(algo, k), std_col] if has_std else 0.0)
+        yerr = None
+        if has_std:
+            lower = [min(e, max(h, 0)) for h, e in zip(heights, errs)]  # 下界不低於 0
+            yerr = [lower, errs]
+        ax.bar(
+            xs, heights, width=width, label=algo,
+            color=STYLES[algo]["color"], edgecolor="black", linewidth=0.8,
+            yerr=yerr, capsize=3, error_kw={"elinewidth": 1.0}, zorder=3,
+        )
+
+    ax.set_xlim(-0.5, len(ks) - 0.5)
+    ax.set_xticks(range(len(ks)))
+    ax.set_xticklabels([f"k={k}" for k in ks])
+    ax.set_xlabel("PDQTA Level")
+    ax.set_axisbelow(True)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.6)
+    if y_step is not None:
+        ax.yaxis.set_major_locator(MultipleLocator(y_step))
+    else:
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.set_ylim(bottom=0 if y_min is None else y_min, top=y_max)
+
+    # 圖例最多兩排（版面上緣只留兩排的空間）；6 個以內維持原本的 3 欄與字體，
+    # 超過時改 4 欄並縮小字體，才放得進圖寬
+    many = len(algos) > 6
+    pdf_path = _finalize_figure(
+        fig, ax, metric, output_path,
+        legend_ncol=math.ceil(len(algos) / 2) if many else 3,
+        legend_fontsize=15 if many else None,
+    )
+    print(f"Saved: {output_path}")
+    print(f"Saved: {pdf_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot cost metrics vs dests or alpha from checkpoints CSVs.")
-    parser.add_argument("csv_paths", nargs="+", help="Path(s) to checkpoints/*.csv result file(s).")
-    parser.add_argument("--x", choices=["dests", "alpha", "qc"], required=True, help="X-axis type.")
+    parser.add_argument("csv_paths", nargs="*", help="Path(s) to checkpoints/*.csv result file(s). "
+                        "--x k 可省略，會自動找 <exp-dir>/qc_<name>_alpha_<alpha>_k_*_d<num-dests>.csv。")
+    parser.add_argument("--x", choices=["dests", "alpha", "qc", "k"], required=True,
+                        help="X-axis type. k = grouped bar chart comparing k (needs qc CSVs, one per k).")
+    parser.add_argument("--num-b", type=int, default=150, help="For --x k: |B| to plot (default 150).")
+    parser.add_argument("--num-dests", type=int, default=50, help="For --x k: num_dests to plot (default 50).")
+    parser.add_argument("--alpha", type=float, default=4, help="For --x k: alpha to plot (default 4).")
+    parser.add_argument("--name", default="synthetic", help="For --x k: graph name in the CSV filename (default synthetic).")
+    parser.add_argument("--exp-dir", default="experiment", help="For --x k: where to look for CSVs when none are given.")
     parser.add_argument("--fixed-dests", type=int, default=None, help="For --x alpha: fixed num_dests to filter on.")
     parser.add_argument("--x-min", type=float, default=None, help="Minimum x value to include (num_dests / alpha / |B| depending on --x).")
     parser.add_argument("--x-max", type=float, default=None, help="Maximum x value to include.")
@@ -544,10 +655,35 @@ def main() -> None:
     parser.add_argument("--out-dir", default="img", help="Output directory for figures (default: img/).")
     args = parser.parse_args()
 
+    if args.x == "k" and not args.csv_paths:
+        args.csv_paths = sorted(glob.glob(os.path.join(
+            args.exp_dir, f"qc_{args.name}_alpha_{format_number_label(args.alpha)}_k_*_d{args.num_dests}.csv")))
+        if not args.csv_paths:
+            print(f"No qc CSVs found in {args.exp_dir}/ for name={args.name}, alpha={args.alpha:g}, dests={args.num_dests}.")
+            sys.exit(1)
+    elif not args.csv_paths:
+        parser.error("csv_paths is required unless --x k")
+
     for p in args.csv_paths:
         if not os.path.exists(p):
             print(f"File not found: {p}")
             sys.exit(1)
+
+    if args.x == "k":
+        df = load_k_mode(args.csv_paths, args.num_b, args.num_dests, args.alpha)
+        print(f"k values: {sorted(df['k'].unique())}")
+        out_dir = os.path.join(
+            args.out_dir, f"qc_k_compare_alpha_{format_number_label(args.alpha)}_b{args.num_b}_d{args.num_dests}")
+        os.makedirs(out_dir, exist_ok=True)
+        selected = list(METRICS) if args.metrics is None else args.metrics.split(",")
+        for metric in selected:
+            if metric not in METRICS:
+                print(f"Unknown metric: {metric}")
+                sys.exit(1)
+            plot_k_bars(df, metric, os.path.join(out_dir, f"{os.path.basename(out_dir)}_{metric}.png"),
+                        y_min=args.y_min, y_max=args.y_max, y_step=args.y_step)
+        print("All plots generated successfully.")
+        return
 
     if args.x == "dests":
         if len(args.csv_paths) != 1:
