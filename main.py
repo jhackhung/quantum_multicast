@@ -21,7 +21,7 @@ import QSTA
 import Debug
 
 CHECKPOINT_DIR = "checkpoints"
-EXPERIMENT_DIR = "experiment/"
+EXPERIMENT_DIR = "experiments_new_pdqta/"
 
 STD_METRIC_KEYS = [
     "transmission_cost",

@@ -87,3 +87,41 @@ best_bound solver_gap round_err_bound note`。
 
 |D| = 5：秒級 OPTIMAL；|D| ≥ 10：60 秒內只有 incumbent，bound gap 約 15–30%。
 需要證明最佳性時請提高 time limit 或縮小實例；`--hint`（用 TBQCM 解當 hint）能改善 incumbent。
+
+## qc sweep 操作流程（|B| = 10..100）
+
+以下指令都在 repo 根目錄、Git Bash 執行。
+
+```
+# 跑實驗：bash ilp/run_qc_sweep.sh [dests] [time_limit 秒] [runs]
+bash ilp/run_qc_sweep.sh 30 300 1      # 輸出 ilp/results/qc_sweep_d30.csv
+bash ilp/run_qc_sweep.sh 50 300 5      # 每點 5 個 run，可算平均與誤差棒
+
+# 繪圖
+ilp/.venv/Scripts/python -m ilp.plot_gap ilp/results/qc_sweep_d30.csv \
+    --x num_B --mode strict --out ilp/results/qc_sweep_d30.png
+```
+
+- 腳本依序跑 |B|=10..100，alpha=4、k=2 寫死在 `ilp/run_qc_sweep.sh`；每個 |B| 的拓撲在 `ilp/configs/qc_<n>.json`
+  （`area_size = 20·√(|B|/150)`，`allow_repeat_hosts=true`）。
+- 斷點續跑 key 是 (name, dests, alpha, run)，每個 |B| 的 config name 不同（`ilp_qc_<n>`）才不會互相略過；
+  中斷後重跑同一指令即可，要重跑某設定先刪對應 CSV。
+- **不同設定請寫不同 CSV**（檔名帶 `_d<dests>`），不要共用同一檔。
+- 中途要停請直接結束 bash 與 python 程序，只停外層 shell 會讓迴圈繼續跑並覆寫 CSV。
+- `--x` 可選 `num_dests / alpha / num_nodes / num_B`；`--mode` 可選 `strict / loose / both`。
+
+### 補跑：只重跑沒證明最佳的 run（不動原 CSV）
+
+```
+# 1. 補完被中斷的 |B|（續跑，已完成的 run 會 skip）
+BS="80" bash ilp/run_qc_sweep.sh 30 300 100
+
+# 2. 只重跑 status != OPTIMAL 的 run，時限拉高；結果寫 *_retry.csv，並產生 *_merged.csv
+ilp/.venv/Scripts/python -m ilp.retry_nonopt ilp/results/qc_sweep_d30.csv --time-limit 900
+#    試跑：--B 90,100 --max 3；中斷後只合併：--merge-only
+
+# 3. 畫圖讀合併後的檔案
+ilp/.venv/Scripts/python -m ilp.plot_gap ilp/results/qc_sweep_d30_merged.csv --x num_B --mode strict --out ilp/results/qc_sweep_d30_merged.png
+```
+
+合併時，retry 的 ILP 成本不比原本差才換掉整組列，否則保留原本。步驟 1 要先做，否則 |B|=80 新跑出的非 OPTIMAL run 不會被步驟 2 抓到。

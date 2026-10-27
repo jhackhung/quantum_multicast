@@ -69,7 +69,7 @@ def _draw(ax, df, x, mode, methods, log, ylim=None):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="+")
-    ap.add_argument("--x", default="num_dests", choices=["num_dests", "alpha", "num_nodes"])
+    ap.add_argument("--x", default="num_dests", choices=["num_dests", "alpha", "num_nodes", "num_B"])
     ap.add_argument("--mode", default="both", choices=["loose", "strict", "both"])
     ap.add_argument("--zoom-ymax", type=float, default=1.5)
     ap.add_argument("--no-zoom", action="store_true")

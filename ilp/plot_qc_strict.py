@@ -1,6 +1,7 @@
 """qc sweep（|B| 掃描）的 strict cost / OPT 圖，樣式沿用 plot_result.py，y 軸只畫到 --y-max。
 
   python -m ilp.plot_qc_strict ilp/results/qc_sweep_d30_merged.csv --y-max 1.5
+  python -m ilp.plot_qc_strict ilp/results/qc_sweep_d30_merged.csv --x-min 20 --x-max 100 --x-step 20
 
 版面（字體、畫布、圖例與 y 軸標籤位置、線型標記、x 軸刻度對應資料點）全部取自 plot_result；
 baseline 的顏色/標記同 plot_result，圖上的 QSTA-TBQCM（CSV 的 TBQCM）用 QSTA 的藍色菱形，QSTA-Raw（CSV 的 RAW）另用紅色。
@@ -48,11 +49,15 @@ def main(argv=None) -> None:
     ap.add_argument("--y-step", type=float, default=0.1)
     ap.add_argument("--x-min", type=float, default=None)
     ap.add_argument("--x-max", type=float, default=None)
+    ap.add_argument("--x-step", type=float, default=None, help="只畫 x-min + k*step 的 |B|（例：--x-min 20 --x-max 100 --x-step 20）")
     ap.add_argument("--out", default=None, help="輸出 png 路徑（同名 pdf 一併輸出）")
     a = ap.parse_args(argv)
 
     df = pd.concat([pd.read_csv(p) for p in a.csv], ignore_index=True)
     df = pr.filter_x_range(df, X_COL, a.x_min, a.x_max)
+    if a.x_step:
+        base = a.x_min if a.x_min is not None else df[X_COL].min()
+        df = df[((df[X_COL] - base) % a.x_step).abs() < 1e-9]
     series = {m: d for m, d in build_series(df).items() if d["ratio"].min() <= a.y_max}
 
     fig, ax = plt.subplots(figsize=(pr.FIG_WIDTH, pr.FIG_HEIGHT))

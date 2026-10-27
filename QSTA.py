@@ -132,7 +132,7 @@ def _total_cost(W: QCNWeights, sub: QCNSubtree, alpha: float) -> float:
         total += alpha
     return total
 
-def pdqta(
+def pdqta_ref(
     W: QCNWeights,
     qn: QuantumNetwork,
     i: int,
@@ -203,6 +203,137 @@ def pdqta(
     t_temp = _memo_pdqta(i, r, m, frozenset(X), frozenset())
     print(_memo_pdqta.cache_info())
     return t_temp
+
+def pdqta(
+    W: QCNWeights,
+    qn: QuantumNetwork,
+    i: int,
+    r: object,
+    m: int,
+    X: Set[object],
+    alpha: float,
+) -> QCNSubtree:
+    """與 pdqta_ref 等價的快速版。
+
+    pdqta_ref 的 while 迴圈裡，內層 n 的上界是 |Y|，與 m 無關；所以對固定
+    (i, r, X, ancestors)，每一輪選出的 best 序列固定，m 只決定做到第幾輪。
+    這裡以 (i, r, X, ancestors) 為 key 只存輪次序列，不同 m 共用。
+    A1 的結果只取決於 (r, X)（排序後取前綴），cpd 用前綴和直接算，贏過目前最佳才建樹。
+    """
+    B = qn.B
+    a1_cache: Dict[Tuple[object, FrozenSet[object]], Tuple[list, list]] = {}
+    states: Dict[tuple, dict] = {}
+
+    def a1(v: object, Y_key: FrozenSet[object]) -> Tuple[list, list]:
+        hit = a1_cache.get((v, Y_key))
+        if hit is None:
+            row = W.get(v, {})
+            cands = sorted((d for d in Y_key if d in row), key=lambda d: row[d])
+            pre = [0.0]
+            for d in cands:
+                pre.append(pre[-1] + row[d])
+            hit = a1_cache[(v, Y_key)] = (cands, pre)
+        return hit
+
+    def make_round(lvl: int, r: object, Y: Set[object], anc: FrozenSet[object]) -> Optional[QCNSubtree]:
+        """選出這一輪的最佳子樹"""
+        Y_key = frozenset(Y)
+        anc_r = anc | {r}
+        best_cpd = math.inf
+        spec = None  # ("a1", n) | ("tree", sub) | ("v1", v, n) | ("vt", v, sub_v)
+
+        if lvl - 1 == 1:
+            cands, pre = a1(r, Y_key)
+            for n in range(1, len(cands) + 1):
+                c = pre[n] / n
+                if c < best_cpd:
+                    best_cpd, spec = c, ("a1", n)
+        else:
+            for n in range(1, len(Y) + 1):
+                try:
+                    sub = get(lvl - 1, r, Y_key, anc, n)
+                except ValueError:
+                    break
+                c = cpd(W, sub, alpha)
+                if c < best_cpd:
+                    best_cpd, spec = c, ("tree", sub)
+
+        for v in W.get(r, {}).keys():
+            if v not in B or v in anc_r:  # prevent cycles
+                continue
+            if lvl - 1 == 1:
+                cands, pre = a1(v, Y_key)
+                w = W[r][v]
+                for n in range(1, len(cands) + 1):
+                    c = (alpha + max(1, math.ceil(math.log2(n + 1))) * w + pre[n]) / n
+                    if c < best_cpd:
+                        best_cpd, spec = c, ("v1", v, n)
+            else:
+                for n in range(1, len(Y) + 1):
+                    try:
+                        sub_v = get(lvl - 1, v, Y_key, anc_r, n)
+                    except ValueError:
+                        break
+                    candidate = QCNSubtree(
+                        root=r,
+                        links=sub_v.links | {(r, v)},
+                        dests=set(sub_v.dests),
+                        activated=sub_v.activated | {v},
+                    )
+                    c = cpd(W, candidate, alpha)
+                    if c < best_cpd:
+                        best_cpd, spec = c, ("vt", v, candidate)
+
+        if spec is None:
+            return None
+        kind = spec[0]
+        if kind == "tree":
+            return spec[1]
+        if kind == "vt":
+            return spec[2]
+        if kind == "a1":
+            chosen = a1(r, Y_key)[0][:spec[1]] # 取前 spec[1] 個目的地，回傳子樹
+            return QCNSubtree(root=r, links={(r, d) for d in chosen}, dests=set(chosen))
+        _, v, n = spec
+        chosen = a1(v, Y_key)[0][:n] # 取前 n 個目的地
+        return QCNSubtree(
+            root=r,
+            links={(v, d) for d in chosen} | {(r, v)},
+            dests=set(chosen),
+            activated={v},
+        )
+
+    def get(lvl: int, r: object, X_key: FrozenSet[object], anc: FrozenSet[object], m: int) -> QCNSubtree:
+        """取得涵蓋 >= m 個目的地的樹"""
+        key = (lvl, r, X_key, anc)
+        st = states.get(key)
+        if st is None:
+            st = states[key] = {"Y": set(X_key), "merged": [QCNSubtree(root=r)], "failed": False}
+        merged = st["merged"]
+        while len(merged[-1].dests) < m and not st["failed"]:
+            best = make_round(lvl, r, st["Y"], anc)
+            if best is None:
+                st["failed"] = True
+                break
+            merged.append(merged[-1].merge(best))
+            st["Y"] -= best.dests
+        if len(merged[-1].dests) < m:
+            raise ValueError(
+                f"A{lvl}({r}, {m}, X): 找不到可行子樹，還缺 {m - len(merged[-1].dests)} 個 destination"
+            )
+        for t in merged:
+            if len(t.dests) >= m:
+                return t
+        raise AssertionError("unreachable")
+
+    X_key = frozenset(X)
+    if i == 1:
+        cands, _ = a1(r, X_key)
+        if len(cands) < m:
+            raise ValueError(f"A1({r}, {m}, |X|={len(X)}): 只有 {len(cands)} 個有限權重的目的地可達")
+        chosen = cands[:m]
+        return QCNSubtree(root=r, links={(r, d) for d in chosen}, dests=set(chosen))
+    return get(i, r, X_key, frozenset(), m)
 
 def _compute_p_map(W: QCNWeights, sub: QCNSubtree, alpha: float) -> Dict[Edge, int]:
     children = _children_map(sub.links)
